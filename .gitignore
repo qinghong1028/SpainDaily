@@ -1,0 +1,23 @@
+# Private trip sources and generated packages (never commit or publish)
+.private/
+private/
+reports/private/
+tmp/
+
+# Local application state and secrets
+.env
+.env.*
+!.env.example
+.sites-runtime/
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# OS and editor files
+.DS_Store
+*.log

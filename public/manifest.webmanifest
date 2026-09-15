@@ -1,0 +1,14 @@
+{
+  "name": "SpainDaily · 每日西班牙",
+  "short_name": "SpainDaily",
+  "description": "离线优先、数据仅存本机的每日旅行行程工具",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f0e7",
+  "theme_color": "#ec5934",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

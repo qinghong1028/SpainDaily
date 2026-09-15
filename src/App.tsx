@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import type { AttachmentMeta, Booking, DayPlan, EventItem, FactStatus, GuideArticle, NoteState, Place, Source, TaskState, TripData } from './domain/types'
 import { demoTrip } from './data/demo'
+import { taskChangeSummary } from './domain/taskChanges'
 import { decryptTripPackage, encryptBackup } from './security/package'
 import {
   clearPrivateData, getSetting, importPackageAtomically, loadAttachment, loadNotes, loadTaskStates,
@@ -270,7 +271,7 @@ function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, ref
         })}</div></section>}
         {stay && <StayTonight event={stay} trip={trip} />}
         <DayNote day={day} travelerId={travelerId} setNotice={setNotice} />
-        {tomorrow && <button className="tomorrow-card" onClick={() => onDate(tomorrow.date)}><div><p className="eyebrow">明日预告{tomorrowTasks.length ? ` · ${tomorrowTasks.length} 项需准备` : ''}</p><strong>{formatDate(tomorrow.date)} · {tomorrow.city}</strong><span>{tomorrowTasks[0]?.title || tomorrow.title}</span></div><ChevronRight /></button>}
+        {tomorrow && <button className="tomorrow-card" onClick={() => onDate(tomorrow.date)}><div><p className="eyebrow">明日预告{tomorrowTasks.length ? ` · ${tomorrowTasks.length} 项需准备` : ''}</p><strong>{formatDate(tomorrow.date)} · {tomorrow.city}</strong><span>{tomorrowTasks.slice(0, 3).map((task) => task?.title).filter(Boolean).join(' · ') || tomorrow.title}</span></div><ChevronRight /></button>}
       </>}
       {calendarOpen && <CalendarSheet trip={trip} travelerId={travelerId} selectedDate={date} actualToday={actualToday} onSelect={(value) => { onDate(value); setCalendarOpen(false) }} onClose={() => setCalendarOpen(false)} />}
       {nextOpen && nextEvent && <EventSheet event={nextEvent.event} trip={trip} travelerId={travelerId} previousPlace={nextPreviousPlace} eventState={eventStates[nextEvent.event.id]} onEventState={(state) => setEventStates((current) => ({ ...current, [nextEvent.event.id]: state }))} onClose={() => setNextOpen(false)} />}
@@ -606,7 +607,7 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
   }
   return <div className="page"><PageHeading eyebrow="本机设置" title="我的" description={`当前视图：${selectedTraveler?.displayName || ''}`} />
     <section className="settings-card status-card"><div className={online ? 'online-dot' : 'offline-dot'}>{online ? <Wifi /> : <WifiOff />}</div><div><strong>{online ? '网络已连接' : '当前离线'}</strong><p>{offlineStatus}</p><button className="text-action" onClick={() => checkOffline().catch(() => setOfflineStatus('检查失败'))}>重新检查离线资料</button></div></section>
-    <section className="settings-card"><h3><FileLock2 /> 更换行程包</h3><p>新包通过完整性校验后才替换现有数据。导入过程失败不会留下半包。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact /></section>
+    <section className="settings-card"><h3><FileLock2 /> 更换行程包</h3><p>新包通过完整性校验后会先提示关联待办变化。导入失败不会留下半包，个人修改按稳定 ID 保留。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact existingTrip={trip} /></section>
     <section className="settings-card"><h3><Download /> 加密备份</h3><p>导出行程、附件、个人任务状态和笔记。密码不会保存在设备上。{lastBackupAt && <><br />最近备份：{new Date(lastBackupAt).toLocaleString('zh-CN')}</>}</p><input type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="设置至少 8 位备份密码" autoComplete="new-password" /><button className="button primary wide" disabled={backingUp || backupPassword.length < 8} onClick={backup}>{backingUp ? '正在生成…' : '下载加密备份'}</button></section>
     <section className="settings-card"><h3><Globe2 /> 本机与时区</h3><label className="select-label">“今天”的参考时区<select value={referenceTimeZone} onChange={(event) => onReferenceTimeZone(event.target.value)}>{Array.from(new Set([Intl.DateTimeFormat().resolvedOptions().timeZone, trip.trip.defaultTimeZone, ...trip.dayPlans.map((day) => day.timeZone)])).map((zone) => <option key={zone} value={zone}>{zone}{zone === Intl.DateTimeFormat().resolvedOptions().timeZone ? ' · 本机' : ''}</option>)}</select></label><Fact label="本机占用" value={estimate.usage ? `${(estimate.usage / 1024 / 1024).toFixed(1)} MB` : '浏览器未提供'} /><p className="microcopy">事件仍按各自所在地 IANA 时区显示。行前默认本机时区；到达后可切成目的地时区。测试日期开关只在开发构建出现。</p></section>
     <section className="settings-card"><h3><LockKeyhole /> 锁定私密资料</h3><p>立即清除当前页面内存中的姓名、行程、票据、任务和笔记；本机密文仍保留，下次需要密码重新解锁。</p><button className="button wide" onClick={onLocked}>立即锁定</button></section>
@@ -615,7 +616,7 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
   </div>
 }
 
-function PackageImporter({ onImported, setNotice, compact }: { onImported: (data: TripData) => void | Promise<void>; setNotice: (value: string | null) => void; compact: boolean }) {
+function PackageImporter({ onImported, setNotice, compact, existingTrip }: { onImported: (data: TripData) => void | Promise<void>; setNotice: (value: string | null) => void; compact: boolean; existingTrip?: TripData }) {
   const [file, setFile] = useState<File | null>(null)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -625,6 +626,10 @@ function PackageImporter({ onImported, setNotice, compact }: { onImported: (data
     setBusy(true); setNotice(null)
     try {
       const pkg = await decryptTripPackage(file, password)
+      if (existingTrip && pkg.kind === 'trip') {
+        const changes = taskChangeSummary(existingTrip, pkg.data)
+        if (changes && !confirm(`${changes}\n\n继续更换行程包吗？`)) return
+      }
       const backupState = pkg.kind === 'backup' ? (pkg.backupState || { taskStates: [], notes: [], settings: {} }) : undefined
       await importPackageAtomically({ data: pkg.data, attachments: pkg.attachments, encryptedPackage: file, password, ...(backupState || {}) })
       setPassword(''); await onImported(pkg.data)

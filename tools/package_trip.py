@@ -42,7 +42,11 @@ def derive(password: str, salt: bytes) -> bytes:
 
 def main():
     args = arguments()
-    password = os.environ.get(args.password_env) or getpass("Package password: ")
+    password = os.environ.get(args.password_env)
+    if not password:
+        password = getpass("Package password: ")
+        if password != getpass("Confirm package password: "):
+            raise SystemExit("Passwords do not match")
     if len(password) < 8:
         raise SystemExit("Password must contain at least 8 characters")
     trip = json.loads(args.trip_json.read_text(encoding="utf-8"))

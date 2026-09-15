@@ -115,7 +115,7 @@ function App() {
   }
 
   if (!ready) return <Splash />
-  if (!trip) return <Welcome hasVault={hasVault} onDemo={() => { openDemo().catch(() => setNotice('虚构演示无法打开。')) }} onActivated={async (data) => { setHasVault(true); await activateTrip(data) }} notice={notice} setNotice={setNotice} />
+  if (!trip) return <Welcome hasVault={hasVault} onDemo={() => { openDemo().catch(() => setNotice('虚构演示无法打开。')) }} onActivated={async (data) => { setHasVault(true); await activateTrip(data); setTab('today') }} notice={notice} setNotice={setNotice} />
   if (!travelerId) return <TravelerGate trip={trip} lastTravelerId={lastTravelerId} onChoose={chooseTraveler} onBack={trip.packageId === 'demo-package' ? () => { lockPrivateData(); setTrip(null) } : undefined} />
 
   const traveler = trip.travelers.find((item) => item.id === travelerId)!
@@ -226,6 +226,7 @@ function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, ref
   const tomorrowTasks = tomorrow ? tomorrow.taskIds.map((id) => trip.dailyTasks.find((task) => task.id === id)).filter((task) => task?.travelerIds.includes(travelerId)) : []
   const dateDelta = daysBetween(actualToday, date)
   const departureDelta = daysBetween(actualToday, trip.trip.startDate)
+  const phaseLabel = date < trip.trip.startDate ? '出发前准备' : `旅行 Day ${daysBetween(trip.trip.startDate, date) + 1}`
   const nextEvent = date === actualToday ? events.map((event) => { const time = eventStates[event.id]?.timeOverride || event.startTime; return { event, time, delta: time ? Math.round((zonedDateTimeToInstant(event.date, time, event.timeZone).getTime() - nowMs) / 60000) : -1 } }).filter((item) => item.delta >= 0).sort((a, b) => a.delta - b.delta)[0] : undefined
   const nextEventIndex = nextEvent ? events.findIndex((item) => item.id === nextEvent.event.id) : -1
   const nextPreviousEvent = nextEventIndex > 0 ? [...events.slice(0, nextEventIndex)].reverse().find((item) => item.placeId) : undefined
@@ -244,7 +245,7 @@ function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, ref
         <div>
           <p className="eyebrow">{date === actualToday ? (departureDelta > 0 ? `距出发 ${departureDelta} 天` : '今天 · 当前参考日期') : date > actualToday ? `正在预览：还有 ${dateDelta} 天` : '回看已过去行程'}</p>
           <h2>{formatDate(date, { month: 'long', day: 'numeric', weekday: 'long' })}</h2>
-          <p>{day?.city || '行前准备'} · {day?.title || '暂无安排'}</p>
+          <p>{phaseLabel} · {day?.city || '行前准备'} · {day?.title || '暂无安排'}</p>
         </div>
         <div className="date-actions">
           <button className="icon-button" onClick={() => setCalendarOpen(true)} aria-label="打开完整日历"><CalendarDays size={18} /></button>
@@ -282,7 +283,7 @@ function DayGuidanceCard({ day, trip }: { day: DayPlan; trip: TripData }) {
   if (!day.guidance) return null
   const sources = day.guidance.sourceIds.map((id) => trip.sources.find((source) => source.id === id)).filter(Boolean) as Source[]
   const optionalTitles = (day.guidance.optionalEventIds || []).map((id) => trip.events.find((event) => event.id === id)?.title).filter(Boolean)
-  return <details className="day-guidance"><summary><span><Sparkles size={17} /> 今日路线与减负建议</span><StatusBadge status="suggested" /></summary><div><Fact label="顺路走法" value={day.guidance.route} /><Fact label="休息窗口" value={day.guidance.rest} /><Fact label="体力不足时" value={day.guidance.lighter} />{optionalTitles.length > 0 && <Fact label="可选项目" value={optionalTitles.join('、')} />}<SourceBlock sources={sources} /></div></details>
+  return <details className="day-guidance"><summary><span><Sparkles size={17} /> 今日路线与减负建议</span><StatusBadge status="suggested" /></summary><div><Fact label="顺路走法" value={day.guidance.route} /><Fact label="休息窗口" value={day.guidance.rest} /><Fact label="下雨 / 疲劳 / 晚出门" value={day.guidance.lighter} />{optionalTitles.length > 0 && <Fact label="可选项目" value={optionalTitles.join('、')} />}<SourceBlock sources={sources} /></div></details>
 }
 
 function CalendarSheet({ trip, travelerId, selectedDate, actualToday, onSelect, onClose }: { trip: TripData; travelerId: string; selectedDate: string; actualToday: string; onSelect: (date: string) => void; onClose: () => void }) {
@@ -535,7 +536,8 @@ function ScheduleView({ trip, travelerId, actualToday, onOpenDay }: { trip: Trip
     const eventCount = day.eventIds.filter((id) => trip.events.find((event) => event.id === id)?.travelerIds.includes(travelerId)).length
     const delta = daysBetween(actualToday, day.date)
     const relative = delta === 0 ? '今天' : delta > 0 ? `还有 ${delta} 天` : `已过去 ${Math.abs(delta)} 天`
-    return <button key={day.id} className={delta === 0 ? 'today' : ''} onClick={() => onOpenDay(day.date)}><time><strong>{Number(day.date.slice(-2))}</strong><span>{formatDate(day.date, { month: 'short', weekday: 'short' })}</span></time><div><p>{day.city} · {relative}</p><strong>{day.title}</strong><span>{day.subtitle || `${eventCount} 项安排`}</span></div><ChevronRight /></button>
+    const phase = day.date < trip.trip.startDate ? '出发前准备' : `旅行 Day ${daysBetween(trip.trip.startDate, day.date) + 1}`
+    return <button key={day.id} className={delta === 0 ? 'today' : ''} onClick={() => onOpenDay(day.date)}><time><strong>{Number(day.date.slice(-2))}</strong><span>{formatDate(day.date, { month: 'short', weekday: 'short' })}</span></time><div><p>{phase} · {day.city} · {relative}</p><strong>{day.title}</strong><span>{day.subtitle || `${eventCount} 项安排`}</span></div><ChevronRight /></button>
   })}</div></div>
 }
 

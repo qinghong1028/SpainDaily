@@ -8,6 +8,7 @@ test('cold start asks for a traveler and never auto-enters the last choice', asy
   await page.getByRole('button', { name: '先用虚构数据看看' }).click()
   await expect(page.getByRole('heading', { name: '今天是谁在看？' })).toBeVisible()
   await page.getByRole('button', { name: /演示旅客 A/ }).click()
+  await expect(page.getByText(/旅行 Day 1 · Madrid/)).toBeVisible()
   await expect(page.getByRole('button', { name: '切换旅客' })).toContainText('演示旅客 A')
   await page.reload()
   await expect(page.getByRole('heading', { name: '每天只看 现在要做的事' })).toBeVisible()

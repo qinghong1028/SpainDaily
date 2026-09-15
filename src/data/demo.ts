@@ -29,7 +29,7 @@ export const demoTrip: TripData = {
     { id: 'demo-place-prado', name: 'Museo Nacional del Prado', city: 'Madrid', address: 'Paseo del Prado, s/n', timeZone: 'Europe/Madrid', googleMapsUrl: 'https://www.google.com/maps/search/?api=1&query=Museo+Nacional+del+Prado', sourceIds: ['demo-source'] },
   ],
   attachments: [],
-  dailyTasks: [{ id: 'demo-task-ticket', dayPlanId: 'demo-day-today', date: today, title: '出发前确认门票已下载到手机', travelerIds: travelers.map((t) => t.id), dueTime: '16:00', eventId: 'demo-event-museum', status: 'suggested', sourceIds: ['demo-source'] }],
-  guides: [{ id: 'demo-guide-safety', title: '城市步行小提示', category: 'safety', summary: '在人多处把包放在身前。', body: ['仅为虚构演示内容。', '真实行程包会保留每条信息的来源与核验状态。'], sourceIds: ['demo-source'] }],
+  dailyTasks: [{ id: 'demo-task-ticket', dayPlanId: 'demo-day-today', date: today, title: '出发前确认门票已下载到手机', travelerIds: travelers.map((t) => t.id), dueTime: '16:00', eventId: 'demo-event-museum', status: 'suggested', timing: 'today', sourceIds: ['demo-source'] }],
+  guides: [{ id: 'demo-guide-safety', title: '城市步行小提示', category: 'safety', summary: '在人多处把包放在身前。', body: ['仅为虚构演示内容。', '真实行程包会保留每条信息的来源与核验状态。'], sourceIds: ['demo-source'], attachmentIds: [] }],
   sources: [{ id: 'demo-source', type: 'user', title: '虚构演示数据', note: '不对应任何真实旅客、订单或行程。' }],
 }

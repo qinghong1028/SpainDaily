@@ -102,17 +102,19 @@ export interface DailyTask {
   dueTime?: string
   eventId?: string
   status: FactStatus
+  timing?: 'today' | 'advance'
   sourceIds: string[]
 }
 
 export interface GuideArticle {
   id: string
   title: string
-  category: 'safety' | 'language' | 'transport' | 'venue' | 'emergency'
+  category: 'safety' | 'language' | 'transport' | 'venue' | 'emergency' | 'source'
   summary: string
   body: string[]
   sourceIds: string[]
   placeId?: string
+  attachmentIds?: string[]
 }
 
 export interface Source {
@@ -168,4 +170,10 @@ export interface StoredTrip {
   key: 'active'
   data: TripData
   importedAt: string
+}
+
+export interface UserState {
+  lastTravelerId?: string
+  referenceTimeZone: string
+  lastBackupAt?: string
 }

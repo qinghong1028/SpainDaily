@@ -7,11 +7,12 @@ The included demo is deliberately fictional. This repository and its build conta
 ## What it does
 
 - Requires an explicit traveler choice on every cold start while keeping normal in-app navigation uninterrupted.
-- Opens the current local date, supports future preview and a one-tap return to today.
+- Opens the current local date, refreshes after resume or midnight, and supports a complete calendar, future preview, countdowns, and a one-tap return to today.
 - Separates document facts, official checks, suggestions, conflicts, inferences, and pending items.
 - Shows per-person transport and ticket attachments without mixing another person's orders.
 - Saves task completion, ignored items, custom tasks, event status, personal notes, and time overrides by stable traveler ID.
-- Uses Google Maps URLs without a paid map SDK.
+- Provides Google Maps place, current-location, previous-stop, address-copy, weather-query, and clearly labeled nearby-search actions without a paid map SDK.
+- Searches guides and opens encrypted full-page source renders for complex original tables.
 - Works offline after the shell and imported attachments are saved locally.
 - Imports, verifies, backs up, and restores AES-256-GCM encrypted trip packages.
 
@@ -35,6 +36,6 @@ The PWA is built under `/SpainDaily/` for GitHub Pages. Only `dist/` is uploaded
 
 ## Private package tooling
 
-`tools/extract_documents.py` extracts OOXML relationships, tables, links, images, and PDF text into a caller-selected private directory. `tools/package_trip.py` validates attachment hashes and creates a password-encrypted `.spaintrip` file. Passwords are read from an environment variable and are not accepted as command-line arguments.
+`tools/extract_documents.py` extracts OOXML relationships, tables, links, images, and PDF text into a caller-selected private directory. `tools/package_trip.py` validates attachment hashes and creates a password-encrypted `.spaintrip` file. Passwords are read from a named environment variable for automation or prompted without echo in an interactive terminal; they are never accepted as command-line arguments.
 
 See [the user guide](docs/USER_GUIDE.md), [architecture](docs/ARCHITECTURE.md), [privacy model](docs/PRIVACY.md), and [test report](docs/TEST_REPORT.md).

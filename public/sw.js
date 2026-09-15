@@ -1,5 +1,5 @@
-const CACHE = 'spaindaily-shell-v2'
-const STATIC_SHELL = ['./manifest.webmanifest', './icon.svg']
+const CACHE = 'spaindaily-shell-v3'
+const STATIC_SHELL = ['./manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png']
 
 async function cacheCompleteShell() {
   const cache = await caches.open(CACHE)

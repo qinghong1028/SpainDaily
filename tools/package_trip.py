@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Create a SpainDaily encrypted package without logging the password.
 
-The password is read from an environment variable named by --password-env.
-The plaintext staging directory and output package should both remain outside Git.
+The password is read from an environment variable named by --password-env, or
+prompted securely in an interactive terminal when that variable is absent. The
+plaintext staging directory and output package should both remain outside Git.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import os
 import struct
 import tempfile
 import zipfile
+from getpass import getpass
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -40,9 +42,7 @@ def derive(password: str, salt: bytes) -> bytes:
 
 def main():
     args = arguments()
-    password = os.environ.get(args.password_env)
-    if not password:
-        raise SystemExit(f"Missing password environment variable: {args.password_env}")
+    password = os.environ.get(args.password_env) or getpass("Package password: ")
     if len(password) < 8:
         raise SystemExit("Password must contain at least 8 characters")
     trip = json.loads(args.trip_json.read_text(encoding="utf-8"))

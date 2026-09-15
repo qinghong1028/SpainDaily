@@ -36,6 +36,7 @@ a { color: inherit; }
 .bottom-nav button.active { color: var(--red); }
 
 .date-hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 15px; padding: 10px 2px 20px; }
+.date-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
 .date-hero h2, .page-heading h2 { margin: 5px 0 4px; color: var(--ink); font-size: clamp(28px, 7vw, 40px); line-height: 1.08; letter-spacing: -.045em; }
 .date-hero p:last-child, .page-heading > p:last-child { margin: 0; color: var(--ink-2); font-size: 14px; }
 .date-strip { display: flex; gap: 7px; margin: 0 -18px 26px; padding: 0 18px 4px; overflow: auto; scrollbar-width: none; }
@@ -90,6 +91,7 @@ a { color: inherit; }
 .task-list strong, .task-list small { display: block; }
 .task-list strong { font-size: 13px; }
 .task-list small { margin-top: 3px; color: var(--ink-2); font-size: 11px; line-height: 1.45; }
+.task-list .task-meta { display: block; margin: 0 0 4px; color: var(--red); font-size: 8px; font-weight: 700; letter-spacing: .04em; }
 .task-list time { color: var(--red); font-size: 11px; font-weight: 700; }
 .task-list > div.done { color: #83908b; }
 .task-list > div.done strong, .task-list > div.ignored strong { text-decoration: line-through; }
@@ -98,6 +100,7 @@ a { color: inherit; }
 .task-actions { display: flex; flex-direction: column; gap: 3px; padding-right: 9px; }
 .task-actions button { padding: 4px 6px; border: 0; background: transparent; color: #7c8985; font-size: 9px; }
 .add-task { padding: 4px 8px; border: 0; border-radius: 99px; background: #e9e1d5; color: var(--green); font-size: 10px; font-weight: 700; }
+.task-expand { display: block; margin: 8px auto 0; padding: 7px 11px; border: 0; background: transparent; color: var(--green); font-size: 10px; font-weight: 700; }
 .nothing-required { margin: 0; padding: 18px; border: 1px dashed #cfc0ae; border-radius: 16px; color: #71807b; font-size: 12px; text-align: center; }
 
 .note-section textarea { width: 100%; min-height: 104px; padding: 15px; resize: vertical; border: 1px solid var(--line); border-radius: 18px; outline: none; background: rgba(255,253,248,.8); color: var(--ink); line-height: 1.6; }
@@ -128,7 +131,12 @@ a { color: inherit; }
 .schedule-list div > strong { color: var(--ink); font-size: 15px; }
 .schedule-list div > span { margin-top: 2px; color: var(--ink-2); font-size: 11px; }
 .schedule-list button > svg { color: #9ca6a2; }
+.schedule-list button.today time { background: var(--red); color: white; }
+.schedule-list button.today p { color: var(--green); }
 
+.guide-search { display: flex; align-items: center; gap: 9px; height: 48px; margin: -8px 0 20px; padding: 0 14px; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); color: #7d8985; }
+.guide-search input { flex: 1; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); }
+.search-count { margin: -10px 4px 18px; color: #7e8a86; font-size: 10px; }
 .guide-groups section { margin-bottom: 25px; }
 .guide-groups section > h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px 3px; font-size: 14px; }
 .guide-groups section > div { overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); }
@@ -171,6 +179,15 @@ a { color: inherit; }
 .sheet > header h2 { margin: 5px 0 18px; color: var(--ink); font-size: 27px; letter-spacing: -.035em; }
 .sheet-lead { padding: 15px; border-radius: 18px; background: var(--paper); }
 .sheet-lead p { margin: 8px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.65; white-space: pre-line; }
+.calendar-range { margin: -5px 0 18px; color: var(--ink-2); font-size: 11px; }
+.calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.calendar-weekdays { margin-bottom: 5px; color: #7e8b87; font-size: 9px; text-align: center; }
+.calendar-grid button { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 57px; padding: 5px 2px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); cursor: pointer; }
+.calendar-grid button strong { font-size: 14px; }
+.calendar-grid button small { width: 100%; margin-top: 3px; overflow: hidden; color: #7a8783; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-grid button.today { box-shadow: inset 0 0 0 2px var(--gold); }
+.calendar-grid button.selected { border-color: var(--red); background: var(--red); color: white; }
+.calendar-grid button.selected small { color: rgba(255,255,255,.75); }
 .fact-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0; }
 .fact { padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,248,.62); }
 .fact span, .fact strong { display: block; }
@@ -183,6 +200,13 @@ a { color: inherit; }
 .choice-row button.active { border-color: var(--green); background: var(--green); color: white; }
 .event-personal textarea { width: 100%; min-height: 78px; padding: 12px; resize: vertical; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); color: var(--ink); }
 .event-personal .adjust-time { min-height: 38px; margin: 0 0 9px; font-size: 10px; }
+.map-actions { margin: 14px 0 0; }
+.map-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.map-action-grid .button { min-width: 0; min-height: 42px; padding: 8px 6px; font-size: 9px; text-align: center; }
+.map-action-grid .button + .button { margin-top: 0; }
+.map-disclaimer { margin: 11px 2px 6px; color: #7d8985; font-size: 9px; }
+.nearby-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.nearby-links a { padding: 6px 9px; border-radius: 99px; background: #e8e0d5; color: var(--green); font-size: 9px; font-weight: 700; text-decoration: none; }
 .booking-fields { overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: var(--paper); }
 .booking-fields > div { position: relative; display: grid; grid-template-columns: 88px 1fr auto; align-items: center; gap: 9px; min-height: 48px; padding: 9px 12px; border-bottom: 1px solid #eee5d8; }
 .booking-fields > div:last-child { border: 0; }
@@ -192,7 +216,11 @@ a { color: inherit; }
 .booking-fields .field-conflict { background: #fff4e0; }
 .attachment-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin-top: 12px; }
 .attachment-grid button { display: flex; flex-direction: column; align-items: flex-start; min-height: 105px; padding: 13px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); text-align: left; cursor: pointer; }
-.attachment-grid svg { margin-bottom: 10px; color: var(--red); }
+.attachment-thumb { position: relative; display: grid; place-items: center; width: 100%; height: 76px; margin-bottom: 9px; overflow: hidden; border-radius: 10px; background: #eee6da; }
+.attachment-thumb > img { width: 100%; height: 100%; object-fit: cover; }
+.attachment-thumb > svg { color: var(--red); }
+.attachment-thumb i { position: absolute; right: 5px; bottom: 5px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(23,63,58,.88); color: white; font-style: normal; }
+.attachment-thumb i svg { margin: 0; color: white; }
 .attachment-grid span { width: 100%; overflow: hidden; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-grid small { margin-top: 3px; color: #84908c; font-size: 9px; }
 .source-block > div { display: grid; grid-template-columns: 44px 1fr 20px; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }

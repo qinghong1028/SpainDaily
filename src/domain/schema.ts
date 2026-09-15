@@ -73,11 +73,11 @@ export const tripDataSchema = z.object({
   })),
   dailyTasks: z.array(z.object({
     id, dayPlanId: id, date: z.string(), title: z.string(), detail: z.string().optional(),
-    travelerIds: z.array(id), dueTime: z.string().optional(), eventId: id.optional(), status, sourceIds: z.array(id),
+    travelerIds: z.array(id), dueTime: z.string().optional(), eventId: id.optional(), status, timing: z.enum(['today', 'advance']).optional(), sourceIds: z.array(id),
   })),
   guides: z.array(z.object({
-    id, title: z.string(), category: z.enum(['safety', 'language', 'transport', 'venue', 'emergency']),
-    summary: z.string(), body: z.array(z.string()), sourceIds: z.array(id), placeId: id.optional(),
+    id, title: z.string(), category: z.enum(['safety', 'language', 'transport', 'venue', 'emergency', 'source']),
+    summary: z.string(), body: z.array(z.string()), sourceIds: z.array(id), placeId: id.optional(), attachmentIds: z.array(id).optional(),
   })),
   sources: z.array(source),
 }).superRefine((data, context) => {
@@ -124,5 +124,6 @@ export const tripDataSchema = z.object({
   data.guides.forEach((item) => {
     if (item.placeId && !places.has(item.placeId)) context.addIssue({ code: 'custom', message: `攻略 ${item.id} 引用了不存在的地点` })
     item.sourceIds.forEach((value) => { if (!sources.has(value)) context.addIssue({ code: 'custom', message: `攻略 ${item.id} 引用了不存在的来源` }) })
+    item.attachmentIds?.forEach((value) => { if (!attachments.has(value)) context.addIssue({ code: 'custom', message: `攻略 ${item.id} 引用了不存在的附件` }) })
   })
 })

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
-  ArrowLeft, CalendarDays, Check, ChevronRight, CircleAlert, Clock3, Download,
+  ArrowLeft, CalendarDays, Check, ChevronRight, CircleAlert, Clock3, CloudSun, Copy, Download,
   ExternalLink, FileLock2, FileText, Globe2, Info, Languages, ListChecks, LockKeyhole,
-  MapPin, Navigation, NotebookPen, Plane, RotateCcw, ShieldCheck, Sparkles, TrainFront,
-  Trash2, UserRound, UsersRound, Wifi, WifiOff, X, ZoomIn,
+  MapPin, Navigation, NotebookPen, Phone, Plane, RotateCcw, Search, ShieldCheck, Sparkles,
+  TrainFront, Trash2, UserRound, UsersRound, Wifi, WifiOff, X, ZoomIn,
 } from 'lucide-react'
-import type { AttachmentMeta, Booking, DayPlan, EventItem, FactStatus, GuideArticle, NoteState, Source, TaskState, TripData } from './domain/types'
+import type { AttachmentMeta, Booking, DayPlan, EventItem, FactStatus, GuideArticle, NoteState, Place, Source, TaskState, TripData } from './domain/types'
 import { demoTrip } from './data/demo'
 import { decryptTripPackage, encryptBackup } from './security/package'
 import {
@@ -13,6 +13,7 @@ import {
   loadTrip, saveNote, saveTaskState, setSetting, storageEstimate, storedAttachmentIds,
 } from './storage/db'
 import { clampTripDate, dateRange, daysBetween, formatDate, formatWeekday, localDateInTimeZone, zonedDateTimeToInstant } from './utils/date'
+import { googleMapsDirections, googleMapsSearch } from './utils/maps'
 
 type Tab = 'today' | 'schedule' | 'guides' | 'me'
 
@@ -40,6 +41,8 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [online, setOnline] = useState(navigator.onLine)
   const [referenceTimeZone, setReferenceTimeZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone)
+  const [now, setNow] = useState(() => new Date())
+  const previousTripDate = useRef('')
 
   useEffect(() => {
     Promise.all([loadTrip(), getSetting<string>('lastTravelerId'), getSetting<string>('referenceTimeZone')])
@@ -62,9 +65,36 @@ function App() {
 
   useEffect(() => {
     if (!trip) return
-    const today = localDateInTimeZone(referenceTimeZone)
+    const today = localDateInTimeZone(referenceTimeZone, new Date())
+    previousTripDate.current = clampTripDate(today, trip.trip.preparationStartDate, trip.trip.endDate)
     setSelectedDate(clampTripDate(today, trip.trip.preparationStartDate, trip.trip.endDate))
   }, [trip, referenceTimeZone])
+
+  useEffect(() => {
+    const refresh = () => {
+      const active = document.activeElement
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+      setNow(new Date())
+    }
+    const onVisibility = () => { if (document.visibilityState === 'visible') refresh() }
+    const timer = window.setInterval(refresh, 60_000)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
+
+  const actualToday = localDateInTimeZone(referenceTimeZone, now)
+  const currentTripDate = trip ? clampTripDate(actualToday, trip.trip.preparationStartDate, trip.trip.endDate) : ''
+  useEffect(() => {
+    if (!currentTripDate) return
+    const prior = previousTripDate.current
+    if (prior && prior !== currentTripDate) setSelectedDate((current) => current === prior ? currentTripDate : current)
+    previousTripDate.current = currentTripDate
+  }, [currentTripDate])
 
   const chooseTraveler = (id: string) => {
     setTravelerId(id)
@@ -77,7 +107,6 @@ function App() {
   if (!travelerId) return <TravelerGate trip={trip} lastTravelerId={lastTravelerId} onChoose={chooseTraveler} onBack={trip.packageId === 'demo-package' ? () => setTrip(null) : undefined} />
 
   const traveler = trip.travelers.find((item) => item.id === travelerId)!
-  const actualToday = clampTripDate(localDateInTimeZone(referenceTimeZone), trip.trip.preparationStartDate, trip.trip.endDate)
 
   return (
     <div className="app-shell">
@@ -95,8 +124,8 @@ function App() {
       {notice && <Notice message={notice} onClose={() => setNotice(null)} />}
 
       <main>
-        {tab === 'today' && <TodayView trip={trip} travelerId={travelerId} date={selectedDate} actualToday={actualToday} referenceTimeZone={referenceTimeZone} onDate={setSelectedDate} setNotice={setNotice} />}
-        {tab === 'schedule' && <ScheduleView trip={trip} travelerId={travelerId} onOpenDay={(date) => { setSelectedDate(date); setTab('today') }} />}
+        {tab === 'today' && <TodayView trip={trip} travelerId={travelerId} date={selectedDate} actualToday={actualToday} returnDate={currentTripDate} nowMs={now.getTime()} referenceTimeZone={referenceTimeZone} onDate={setSelectedDate} setNotice={setNotice} />}
+        {tab === 'schedule' && <ScheduleView trip={trip} travelerId={travelerId} actualToday={actualToday} onOpenDay={(date) => { setSelectedDate(date); setTab('today') }} />}
         {tab === 'guides' && <GuidesView trip={trip} />}
         {tab === 'me' && <MeView trip={trip} travelerId={travelerId} online={online} referenceTimeZone={referenceTimeZone} onReferenceTimeZone={(value) => { setReferenceTimeZone(value); setSetting('referenceTimeZone', value).catch(() => setNotice('参考时区未能保存。')) }} onImported={(data) => { setTrip(data); setTravelerId(null); setTab('today') }} onDeleted={() => { setTrip(null); setTravelerId(null) }} setNotice={setNotice} />}
       </main>
@@ -156,8 +185,9 @@ function TravelerGate({ trip, lastTravelerId, onChoose, onBack }: { trip: TripDa
   )
 }
 
-function TodayView({ trip, travelerId, date, actualToday, referenceTimeZone, onDate, setNotice }: { trip: TripData; travelerId: string; date: string; actualToday: string; referenceTimeZone: string; onDate: (date: string) => void; setNotice: (value: string | null) => void }) {
+function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, referenceTimeZone, onDate, setNotice }: { trip: TripData; travelerId: string; date: string; actualToday: string; returnDate: string; nowMs: number; referenceTimeZone: string; onDate: (date: string) => void; setNotice: (value: string | null) => void }) {
   const [eventStates, setEventStates] = useState<Record<string, TaskState>>({})
+  const [calendarOpen, setCalendarOpen] = useState(false)
   const dates = dateRange(trip.trip.preparationStartDate, trip.trip.endDate)
   const day = trip.dayPlans.find((item) => item.date === date && item.travelerIds.includes(travelerId))
   const events = day ? day.eventIds.map((id) => trip.events.find((event) => event.id === id)).filter((event): event is EventItem => Boolean(event && event.travelerIds.includes(travelerId))) : []
@@ -167,7 +197,7 @@ function TodayView({ trip, travelerId, date, actualToday, referenceTimeZone, onD
   const tomorrowTasks = tomorrow ? tomorrow.taskIds.map((id) => trip.dailyTasks.find((task) => task.id === id)).filter((task) => task?.travelerIds.includes(travelerId)) : []
   const dateDelta = daysBetween(actualToday, date)
   const departureDelta = daysBetween(actualToday, trip.trip.startDate)
-  const nextEvent = date === actualToday ? events.map((event) => { const time = eventStates[event.id]?.timeOverride || event.startTime; return { event, time, delta: time ? Math.round((zonedDateTimeToInstant(event.date, time, event.timeZone).getTime() - Date.now()) / 60000) : -1 } }).filter((item) => item.delta >= 0).sort((a, b) => a.delta - b.delta)[0] : undefined
+  const nextEvent = date === actualToday ? events.map((event) => { const time = eventStates[event.id]?.timeOverride || event.startTime; return { event, time, delta: time ? Math.round((zonedDateTimeToInstant(event.date, time, event.timeZone).getTime() - nowMs) / 60000) : -1 } }).filter((item) => item.delta >= 0).sort((a, b) => a.delta - b.delta)[0] : undefined
   const dayTimeZone = day?.timeZone || referenceTimeZone
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -184,7 +214,10 @@ function TodayView({ trip, travelerId, date, actualToday, referenceTimeZone, onD
           <h2>{formatDate(date, { month: 'long', day: 'numeric', weekday: 'long' })}</h2>
           <p>{day?.city || '行前准备'} · {day?.title || '暂无安排'}</p>
         </div>
-        {date !== actualToday && <button className="button small" onClick={() => onDate(actualToday)}><RotateCcw size={15} /> 回到今天</button>}
+        <div className="date-actions">
+          <button className="icon-button" onClick={() => setCalendarOpen(true)} aria-label="打开完整日历"><CalendarDays size={18} /></button>
+          {date !== returnDate && <button className="button small" onClick={() => onDate(returnDate)}><RotateCcw size={15} />{actualToday >= trip.trip.preparationStartDate && actualToday <= trip.trip.endDate ? '回到今天' : '回到行程边界'}</button>}
+        </div>
       </section>
 
       <div className="timezone-line"><Globe2 size={14} /> 今天按 {referenceTimeZone} 判断{dayTimeZone !== referenceTimeZone && <span> · 当日事件时区 {dayTimeZone}</span>}</div>
@@ -196,15 +229,37 @@ function TodayView({ trip, travelerId, date, actualToday, referenceTimeZone, onD
       </div>
 
       {!day ? <EmptyDay /> : <>
-        {events.length > 0 && <section className="section"><SectionTitle title="今日时间线" count={events.length} /><div className="timeline">{events.map((event) => <EventCard key={event.id} event={event} trip={trip} travelerId={travelerId} eventState={eventStates[event.id]} onEventState={(state) => setEventStates((current) => ({ ...current, [event.id]: state }))} />)}</div></section>}
+        {events.length > 0 && <section className="section"><SectionTitle title="今日时间线" count={events.length} /><div className="timeline">{events.map((event, index) => {
+          const previousEvent = [...events.slice(0, index)].reverse().find((item) => item.placeId)
+          const previousPlace = previousEvent?.placeId ? trip.places.find((item) => item.id === previousEvent.placeId) : undefined
+          return <EventCard key={event.id} event={event} trip={trip} travelerId={travelerId} previousPlace={previousPlace} eventState={eventStates[event.id]} onEventState={(state) => setEventStates((current) => ({ ...current, [event.id]: state }))} />
+        })}</div></section>}
         <TaskList travelerId={travelerId} day={day} tasks={tasks as NonNullable<(typeof trip.dailyTasks)[number]>[]} setNotice={setNotice} />
         {stay && <StayTonight event={stay} trip={trip} />}
         <DayNote day={day} travelerId={travelerId} setNotice={setNotice} />
         {tomorrow && <button className="tomorrow-card" onClick={() => onDate(tomorrow.date)}><div><p className="eyebrow">明日预告{tomorrowTasks.length ? ` · ${tomorrowTasks.length} 项需准备` : ''}</p><strong>{formatDate(tomorrow.date)} · {tomorrow.city}</strong><span>{tomorrowTasks[0]?.title || tomorrow.title}</span></div><ChevronRight /></button>}
       </>}
+      {calendarOpen && <CalendarSheet trip={trip} travelerId={travelerId} selectedDate={date} actualToday={actualToday} onSelect={(value) => { onDate(value); setCalendarOpen(false) }} onClose={() => setCalendarOpen(false)} />}
       {import.meta.env.DEV && <DevClock trip={trip} onDate={onDate} />}
     </div>
   )
+}
+
+function CalendarSheet({ trip, travelerId, selectedDate, actualToday, onSelect, onClose }: { trip: TripData; travelerId: string; selectedDate: string; actualToday: string; onSelect: (date: string) => void; onClose: () => void }) {
+  const dates = dateRange(trip.trip.preparationStartDate, trip.trip.endDate)
+  const offset = new Date(`${dates[0]}T12:00:00Z`).getUTCDay()
+  const cells: Array<string | null> = [...Array.from({ length: offset }, () => null), ...dates]
+  while (cells.length % 7) cells.push(null)
+  return <Sheet title="完整日历" onClose={onClose}>
+    <p className="calendar-range">{formatDate(trip.trip.preparationStartDate)}—{formatDate(trip.trip.endDate)} · 行前与返程连续显示</p>
+    <div className="calendar-weekdays">{'日一二三四五六'.split('').map((item) => <span key={item}>周{item}</span>)}</div>
+    <div className="calendar-grid">{cells.map((value, index) => {
+      if (!value) return <span key={`empty-${index}`} />
+      const day = trip.dayPlans.find((item) => item.date === value && item.travelerIds.includes(travelerId))
+      const className = [value === selectedDate ? 'selected' : '', value === actualToday ? 'today' : ''].filter(Boolean).join(' ')
+      return <button key={value} className={className} onClick={() => onSelect(value)} aria-label={`${formatDate(value, { month: 'long', day: 'numeric' })} ${day?.city || '无安排'}`}><strong>{Number(value.slice(-2))}</strong><small>{day?.city || '—'}</small></button>
+    })}</div>
+  </Sheet>
 }
 
 function StayTonight({ event, trip }: { event: EventItem; trip: TripData }) {
@@ -217,7 +272,7 @@ function EmptyDay() {
   return <div className="empty-card"><Sparkles /><h3>今天没有排定事项</h3><p>没有为了填满日历而添加通用任务。</p></div>
 }
 
-function EventCard({ event, trip, travelerId, eventState, onEventState }: { event: EventItem; trip: TripData; travelerId: string; eventState?: TaskState; onEventState: (state: TaskState) => void }) {
+function EventCard({ event, trip, travelerId, previousPlace, eventState, onEventState }: { event: EventItem; trip: TripData; travelerId: string; previousPlace?: Place; eventState?: TaskState; onEventState: (state: TaskState) => void }) {
   const [open, setOpen] = useState(false)
   const Icon = eventIcons[event.kind]
   return <>
@@ -227,14 +282,27 @@ function EventCard({ event, trip, travelerId, eventState, onEventState }: { even
       <div className="event-main"><strong>{event.title}</strong>{event.subtitle && <span>{event.subtitle}</span>}<StatusBadge status={event.status} />{eventState?.timeOverride && <small className="user-override">个人调整</small>}{eventState?.complete && <small className="user-override done-label">已完成</small>}{eventState?.ignored && <small className="user-override">已跳过</small>}</div>
       <ChevronRight size={18} />
     </button>
-    {open && <EventSheet event={event} trip={trip} travelerId={travelerId} eventState={eventState} onEventState={onEventState} onClose={() => setOpen(false)} />}
+    {open && <EventSheet event={event} trip={trip} travelerId={travelerId} previousPlace={previousPlace} eventState={eventState} onEventState={onEventState} onClose={() => setOpen(false)} />}
   </>
 }
 
-function EventSheet({ event, trip, travelerId, eventState, onEventState, onClose }: { event: EventItem; trip: TripData; travelerId: string; eventState?: TaskState; onEventState: (state: TaskState) => void; onClose: () => void }) {
+function EventSheet({ event, trip, travelerId, previousPlace, eventState, onEventState, onClose }: { event: EventItem; trip: TripData; travelerId: string; previousPlace?: Place; eventState?: TaskState; onEventState: (state: TaskState) => void; onClose: () => void }) {
   const booking = event.bookingId ? trip.bookings.find((item) => item.id === event.bookingId) : undefined
   const place = event.placeId ? trip.places.find((item) => item.id === event.placeId) : undefined
   const sources = event.sourceIds.map((id) => trip.sources.find((source) => source.id === id)).filter(Boolean) as Source[]
+  const [copied, setCopied] = useState(false)
+  const destination = place ? (place.address || `${place.name}, ${place.city}`) : ''
+  const previousDestination = previousPlace ? (previousPlace.address || `${previousPlace.name}, ${previousPlace.city}`) : ''
+  const travelMode = ['flight', 'train', 'transfer'].includes(event.kind) ? 'transit' : 'walking'
+  const phone = booking?.fields.find((field) => field.label.includes('电话') && !field.sensitive)?.value
+  const copyAddress = async () => {
+    if (!destination) return
+    try {
+      await navigator.clipboard.writeText(destination)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1800)
+    } catch { prompt('复制地址', destination) }
+  }
   return <Sheet onClose={onClose} title={event.title}>
     <div className="sheet-lead"><StatusBadge status={event.status} /><p>{event.detail || event.subtitle}</p></div>
     <div className="fact-grid">
@@ -242,13 +310,30 @@ function EventSheet({ event, trip, travelerId, eventState, onEventState, onClose
       <Fact label="时区" value={event.timeZone} />
       {place && <Fact label="地点" value={place.address ? `${place.name}\n${place.address}` : place.name} />}
     </div>
-    {place && <a className="button primary wide" href={place.googleMapsUrl} target="_blank" rel="noreferrer"><Navigation size={17} /> Google 地图导航</a>}
+    {place && <section className="map-actions" aria-label="地点操作">
+      <div className="map-action-grid">
+        <a className="button primary" href={place.googleMapsUrl} target="_blank" rel="noreferrer"><MapPin size={16} /> 查看地点</a>
+        <a className="button" href={googleMapsDirections(destination, undefined, travelMode)} target="_blank" rel="noreferrer"><Navigation size={16} /> 从当前位置导航</a>
+        {previousPlace && previousPlace.id !== place.id && <a className="button" href={googleMapsDirections(destination, previousDestination, travelMode)} target="_blank" rel="noreferrer"><Navigation size={16} /> 从上一站看路线</a>}
+        <button className="button" onClick={copyAddress}><Copy size={16} />{copied ? '地址已复制' : '复制地址'}</button>
+        {phone && <a className="button" href={`tel:${phone.replace(/[^+\d]/g, '')}`}><Phone size={16} /> 联系地点</a>}
+        <a className="button" href={weatherSearch(place.city)} target="_blank" rel="noreferrer"><CloudSun size={16} /> 临近再查天气</a>
+      </div>
+      <p className="map-disclaimer">下列为地图搜索入口，结果未经核验：</p>
+      <div className="nearby-links">{['餐厅', '药店', '洗手间'].map((label) => <a key={label} href={googleMapsSearch(`${label} near ${place.name}, ${place.city}`)} target="_blank" rel="noreferrer">附近{label}</a>)}</div>
+    </section>}
     {event.actionUrl && (!place || event.actionUrl !== place.googleMapsUrl) && <a className="button wide" href={event.actionUrl} target="_blank" rel="noreferrer">{event.actionLabel || '打开链接'} <ExternalLink size={15} /></a>}
     {booking && <BookingBlock booking={booking} trip={trip} />}
     {event.attachmentIds.length > 0 && <AttachmentGrid attachmentIds={event.attachmentIds} trip={trip} />}
     <EventPersonalState event={event} travelerId={travelerId} eventState={eventState} onEventState={onEventState} />
     <SourceBlock sources={sources} />
   </Sheet>
+}
+
+function weatherSearch(city: string): string {
+  const url = new URL('https://www.google.com/search')
+  url.searchParams.set('q', `${city} weather`)
+  return url.toString()
 }
 
 function EventPersonalState({ event, travelerId, eventState, onEventState }: { event: EventItem; travelerId: string; eventState?: TaskState; onEventState: (state: TaskState) => void }) {
@@ -306,14 +391,33 @@ function AttachmentGrid({ attachmentIds, trip }: { attachmentIds: string[]; trip
   }
   const close = () => { if (viewer) URL.revokeObjectURL(viewer.url); setViewer(null) }
   const metas = attachmentIds.map((id) => trip.attachments.find((item) => item.id === id)).filter(Boolean) as AttachmentMeta[]
-  return <><div className="attachment-grid">{metas.map((meta) => <button key={meta.id} onClick={() => open(meta)}><FileLock2 /><span>{meta.name}</span><small>{meta.sensitive ? '敏感附件 · 本机查看' : '本机附件'}</small></button>)}</div>{viewer && <div className="image-viewer" role="dialog" aria-modal="true" aria-label={`查看 ${viewer.meta.name}`}><div className="viewer-bar"><span><ZoomIn size={17} /> 双指或滚轮可放大</span><button onClick={close} aria-label="关闭票据"><X /></button></div><div className="image-scroll"><img src={viewer.url} alt={viewer.meta.name} /></div></div>}</>
+  return <><div className="attachment-grid">{metas.map((meta) => <button key={meta.id} onClick={() => open(meta)}><AttachmentThumbnail meta={meta} /><span>{meta.name}</span><small>{meta.sensitive ? '敏感附件 · 本机原图' : '本机原图'}</small></button>)}</div>{viewer && <div className="image-viewer" role="dialog" aria-modal="true" aria-label={`查看 ${viewer.meta.name}`}><div className="viewer-bar"><span><ZoomIn size={17} /> 原图 · 双指或滚轮可放大</span><button onClick={close} aria-label="关闭票据"><X /></button></div><div className="image-scroll"><img src={viewer.url} alt={viewer.meta.name} /></div></div>}</>
+}
+
+function AttachmentThumbnail({ meta }: { meta: AttachmentMeta }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    if (!meta.mimeType.startsWith('image/')) return
+    let objectUrl = ''
+    let cancelled = false
+    loadAttachment(meta.id).then((blob) => {
+      if (!blob || cancelled) return
+      objectUrl = URL.createObjectURL(blob)
+      setUrl(objectUrl)
+    }).catch(() => undefined)
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [meta.id, meta.mimeType])
+  return <span className="attachment-thumb">{url ? <img src={url} alt="" loading="lazy" /> : <FileLock2 />}{meta.sensitive && <i aria-label="敏感附件"><LockKeyhole size={12} /></i>}</span>
 }
 
 function TaskList({ travelerId, day, tasks, setNotice }: { travelerId: string; day: DayPlan; tasks: TripData['dailyTasks']; setNotice: (value: string | null) => void }) {
   const [states, setStates] = useState<Record<string, TaskState>>({})
+  const [expanded, setExpanded] = useState(false)
   useEffect(() => { loadTaskStates().then((items) => setStates(Object.fromEntries(items.filter((item) => item.travelerId === travelerId).map((item) => [item.taskId, item])))).catch(() => setNotice('任务状态读取失败。')) }, [travelerId, day.id, setNotice])
-  const customTasks = Object.values(states).filter((state) => state.custom && state.dayPlanId === day.id && !state.deleted).map((state) => ({ id: state.taskId, title: state.titleOverride || '自定义任务', detail: undefined, dueTime: undefined }))
+  useEffect(() => setExpanded(false), [day.id])
+  const customTasks = Object.values(states).filter((state) => state.custom && state.dayPlanId === day.id && !state.deleted).map((state) => ({ id: state.taskId, dayPlanId: day.id, date: day.date, title: state.titleOverride || '自定义任务', detail: undefined, dueTime: undefined, travelerIds: [travelerId], status: 'suggested' as const, timing: 'today' as const, sourceIds: [] }))
   const visibleTasks = [...tasks, ...customTasks]
+  const renderedTasks = expanded ? visibleTasks : visibleTasks.slice(0, 3)
   const persist = (state: TaskState) => {
     setStates((current) => ({ ...current, [state.taskId]: state }))
     saveTaskState(state).catch(() => setNotice('任务修改未能保存，请检查浏览器存储空间。'))
@@ -343,11 +447,11 @@ function TaskList({ travelerId, day, tasks, setNotice }: { travelerId: string; d
     if (!confirm('删除这条自定义任务？')) return
     persist({ ...current, key: `${travelerId}:${taskId}`, travelerId, taskId, complete: false, deleted: true, updatedAt: new Date().toISOString() })
   }
-  return <section className="section"><div className="section-title"><h3>今天要确认</h3><button className="add-task" onClick={add}>＋ 新增</button></div>{visibleTasks.length === 0 ? <p className="nothing-required">今天没有必须处理的事项。</p> : <div className="task-list">{visibleTasks.map((task) => {
+  return <section className="section"><div className="section-title"><h3>今天要确认</h3><button className="add-task" onClick={add}>＋ 新增</button></div>{visibleTasks.length === 0 ? <p className="nothing-required">今天没有必须处理的事项。</p> : <><div className="task-list">{renderedTasks.map((task) => {
     const state = states[task.id]
     const title = state?.titleOverride || task.title
-    return <div key={task.id} className={`${state?.complete ? 'done' : ''} ${state?.ignored ? 'ignored' : ''}`}><button className="task-toggle" onClick={() => toggle(task.id)}><span className="check">{state?.complete && <Check size={16} />}</span><span><strong>{title}</strong>{task.detail && <small>{task.detail}</small>}</span>{task.dueTime && <time>{task.dueTime}</time>}</button><div className="task-actions"><button onClick={() => edit(task.id, title)}>编辑</button>{state?.custom ? <button onClick={() => remove(task.id)}>删除</button> : <button onClick={() => ignore(task.id)}>{state?.ignored ? '恢复' : '忽略'}</button>}</div></div>
-  })}</div>}</section>
+    return <div key={task.id} className={`${state?.complete ? 'done' : ''} ${state?.ignored ? 'ignored' : ''}`}><button className="task-toggle" onClick={() => toggle(task.id)}><span className="check">{state?.complete && <Check size={16} />}</span><span><span className="task-meta">{task.timing === 'advance' ? '提前准备' : '当天处理'} · {statusMeta[task.status].label}</span><strong>{title}</strong>{task.detail && <small>{task.detail}</small>}</span>{task.dueTime && <time>{task.dueTime}</time>}</button><div className="task-actions"><button onClick={() => edit(task.id, title)}>编辑</button>{state?.custom ? <button onClick={() => remove(task.id)}>删除</button> : <button onClick={() => ignore(task.id)}>{state?.ignored ? '恢复' : '忽略'}</button>}</div></div>
+  })}</div>{visibleTasks.length > 3 && <button className="task-expand" onClick={() => setExpanded((value) => !value)}>{expanded ? '收起任务' : `展开其余 ${visibleTasks.length - 3} 项`}</button>}</>}</section>
 }
 
 function DayNote({ day, travelerId, setNotice }: { day: DayPlan; travelerId: string; setNotice: (value: string | null) => void }) {
@@ -367,33 +471,44 @@ function DayNote({ day, travelerId, setNotice }: { day: DayPlan; travelerId: str
   return <section className="section note-section"><SectionTitle title="我的当天笔记" icon={NotebookPen} /><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="集合点、临时想法、花费……只保存在这台设备" /><small className={`save-state ${state}`}>{state === 'saving' ? '正在保存…' : state === 'saved' ? '已保存到本机' : state === 'error' ? '保存失败' : '仅自己这个旅客视图可见'}</small></section>
 }
 
-function ScheduleView({ trip, travelerId, onOpenDay }: { trip: TripData; travelerId: string; onOpenDay: (date: string) => void }) {
+function ScheduleView({ trip, travelerId, actualToday, onOpenDay }: { trip: TripData; travelerId: string; actualToday: string; onOpenDay: (date: string) => void }) {
   const days = trip.dayPlans.filter((day) => day.travelerIds.includes(travelerId))
   return <div className="page"><PageHeading eyebrow={`${trip.trip.preparationStartDate} — ${trip.trip.endDate}`} title="全部日程" description="行前、旅途与每个人的返程都在同一条时间线上。" /><div className="schedule-list">{days.map((day) => {
     const eventCount = day.eventIds.filter((id) => trip.events.find((event) => event.id === id)?.travelerIds.includes(travelerId)).length
-    return <button key={day.id} onClick={() => onOpenDay(day.date)}><time><strong>{Number(day.date.slice(-2))}</strong><span>{formatDate(day.date, { month: 'short', weekday: 'short' })}</span></time><div><p>{day.city}</p><strong>{day.title}</strong><span>{day.subtitle || `${eventCount} 项安排`}</span></div><ChevronRight /></button>
+    const delta = daysBetween(actualToday, day.date)
+    const relative = delta === 0 ? '今天' : delta > 0 ? `还有 ${delta} 天` : `已过去 ${Math.abs(delta)} 天`
+    return <button key={day.id} className={delta === 0 ? 'today' : ''} onClick={() => onOpenDay(day.date)}><time><strong>{Number(day.date.slice(-2))}</strong><span>{formatDate(day.date, { month: 'short', weekday: 'short' })}</span></time><div><p>{day.city} · {relative}</p><strong>{day.title}</strong><span>{day.subtitle || `${eventCount} 项安排`}</span></div><ChevronRight /></button>
   })}</div></div>
 }
 
 function GuidesView({ trip }: { trip: TripData }) {
   const [selected, setSelected] = useState<GuideArticle | null>(null)
+  const [query, setQuery] = useState('')
   const categories = [
     { id: 'safety', label: '安全防盗', icon: ShieldCheck }, { id: 'language', label: '常用西语', icon: Languages },
     { id: 'transport', label: '交通', icon: TrainFront }, { id: 'venue', label: '场馆', icon: Sparkles },
-    { id: 'emergency', label: '紧急信息', icon: CircleAlert },
+    { id: 'emergency', label: '紧急信息', icon: CircleAlert }, { id: 'source', label: '原文页', icon: FileText },
   ] as const
-  return <div className="page"><PageHeading eyebrow="原文资料 + 官网核验" title="资料攻略" description="每条攻略都能追溯来源；建议不会冒充已经确认的事实。" /><div className="guide-groups">{categories.map((category) => {
-    const articles = trip.guides.filter((guide) => guide.category === category.id)
+  const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN')
+  const matches = (guide: GuideArticle) => {
+    if (!normalizedQuery) return true
+    const place = guide.placeId ? trip.places.find((item) => item.id === guide.placeId) : undefined
+    const sourceTitles = guide.sourceIds.map((id) => trip.sources.find((item) => item.id === id)?.title || '')
+    return [guide.title, guide.summary, ...guide.body, place?.name || '', place?.city || '', ...sourceTitles].join('\n').toLocaleLowerCase('zh-CN').includes(normalizedQuery)
+  }
+  const resultCount = trip.guides.filter(matches).length
+  return <div className="page"><PageHeading eyebrow="原文资料 + 官网核验" title="资料攻略" description="每条攻略都能追溯来源；建议不会冒充已经确认的事实。" /><label className="guide-search"><Search size={17} /><input aria-label="搜索攻略" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜地点、交通、注意事项或来源" /></label>{normalizedQuery && <p className="search-count">找到 {resultCount} 条</p>}<div className="guide-groups">{categories.map((category) => {
+    const articles = trip.guides.filter((guide) => guide.category === category.id && matches(guide))
     if (!articles.length) return null
     const Icon = category.icon
     return <section key={category.id}><h3><Icon size={18} />{category.label}</h3><div>{articles.map((guide) => <button key={guide.id} onClick={() => setSelected(guide)}><span><strong>{guide.title}</strong><small>{guide.summary}</small></span><ChevronRight /></button>)}</div></section>
-  })}</div>{selected && <GuideSheet guide={selected} trip={trip} onClose={() => setSelected(null)} />}</div>
+  })}{normalizedQuery && resultCount === 0 && <p className="nothing-required">没有匹配的攻略或来源。</p>}</div>{selected && <GuideSheet guide={selected} trip={trip} onClose={() => setSelected(null)} />}</div>
 }
 
 function GuideSheet({ guide, trip, onClose }: { guide: GuideArticle; trip: TripData; onClose: () => void }) {
   const sources = guide.sourceIds.map((id) => trip.sources.find((source) => source.id === id)).filter(Boolean) as Source[]
   const place = guide.placeId ? trip.places.find((item) => item.id === guide.placeId) : undefined
-  return <Sheet title={guide.title} onClose={onClose}><p className="guide-summary">{guide.summary}</p><div className="guide-body">{guide.body.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>{place && <a className="button primary wide" href={place.googleMapsUrl} target="_blank" rel="noreferrer"><Navigation size={17} /> 在 Google 地图打开</a>}<SourceBlock sources={sources} /></Sheet>
+  return <Sheet title={guide.title} onClose={onClose}><p className="guide-summary">{guide.summary}</p><div className="guide-body">{guide.body.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>{place && <a className="button primary wide" href={place.googleMapsUrl} target="_blank" rel="noreferrer"><Navigation size={17} /> 在 Google 地图打开</a>}{guide.attachmentIds && guide.attachmentIds.length > 0 && <AttachmentGrid attachmentIds={guide.attachmentIds} trip={trip} />}<SourceBlock sources={sources} /></Sheet>
 }
 
 function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZone, onImported, onDeleted, setNotice }: { trip: TripData; travelerId: string; online: boolean; referenceTimeZone: string; onReferenceTimeZone: (value: string) => void; onImported: (data: TripData) => void; onDeleted: () => void; setNotice: (value: string | null) => void }) {
@@ -401,13 +516,14 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
   const [backupPassword, setBackupPassword] = useState('')
   const [backingUp, setBackingUp] = useState(false)
   const [offlineStatus, setOfflineStatus] = useState('尚未检查')
+  const [lastBackupAt, setLastBackupAt] = useState('')
   const checkOffline = async () => {
     const stored = new Set(await storedAttachmentIds())
     const missing = trip.attachments.filter((item) => !stored.has(item.id))
     const shellReady = !import.meta.env.PROD || ('serviceWorker' in navigator && await Promise.race([navigator.serviceWorker.ready.then(() => true), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 3000))]))
     setOfflineStatus(missing.length ? `缺少 ${missing.length} 个附件，请重新导入` : shellReady ? `完整：程序与 ${trip.attachments.length} 个附件已存本机` : '附件完整，但程序离线缓存尚未完成')
   }
-  useEffect(() => { storageEstimate().then(setEstimate); checkOffline().catch(() => setOfflineStatus('检查失败')) }, [trip.packageId])
+  useEffect(() => { storageEstimate().then(setEstimate); getSetting<string>('lastBackupAt').then((value) => setLastBackupAt(value || '')); checkOffline().catch(() => setOfflineStatus('检查失败')) }, [trip.packageId])
   const selectedTraveler = trip.travelers.find((item) => item.id === travelerId)
   const backup = async () => {
     setBackingUp(true)
@@ -418,7 +534,10 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
       const blob = await encryptBackup(trip, attachments, backupPassword, { taskStates, notes })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = `SpainDaily-backup-${new Date().toISOString().slice(0, 10)}.spaintrip`; anchor.click()
-      URL.revokeObjectURL(url); setBackupPassword(''); setNotice('加密备份已下载。请把密码与备份文件分开保存。')
+      URL.revokeObjectURL(url)
+      const backedUpAt = new Date().toISOString()
+      await setSetting('lastBackupAt', backedUpAt)
+      setLastBackupAt(backedUpAt); setBackupPassword(''); setNotice('加密备份已下载。请把密码与备份文件分开保存。')
     } catch (error) { setNotice(error instanceof Error ? error.message : '备份失败') } finally { setBackingUp(false) }
   }
   const remove = async () => {
@@ -428,7 +547,7 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
   return <div className="page"><PageHeading eyebrow="本机设置" title="我的" description={`当前视图：${selectedTraveler?.displayName || ''}`} />
     <section className="settings-card status-card"><div className={online ? 'online-dot' : 'offline-dot'}>{online ? <Wifi /> : <WifiOff />}</div><div><strong>{online ? '网络已连接' : '当前离线'}</strong><p>{offlineStatus}</p><button className="text-action" onClick={() => checkOffline().catch(() => setOfflineStatus('检查失败'))}>重新检查离线资料</button></div></section>
     <section className="settings-card"><h3><FileLock2 /> 更换行程包</h3><p>新包通过完整性校验后才替换现有数据。导入过程失败不会留下半包。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact /></section>
-    <section className="settings-card"><h3><Download /> 加密备份</h3><p>导出行程、附件、个人任务状态和笔记。密码不会保存在设备上。</p><input type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="设置至少 8 位备份密码" autoComplete="new-password" /><button className="button primary wide" disabled={backingUp || backupPassword.length < 8} onClick={backup}>{backingUp ? '正在生成…' : '下载加密备份'}</button></section>
+    <section className="settings-card"><h3><Download /> 加密备份</h3><p>导出行程、附件、个人任务状态和笔记。密码不会保存在设备上。{lastBackupAt && <><br />最近备份：{new Date(lastBackupAt).toLocaleString('zh-CN')}</>}</p><input type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="设置至少 8 位备份密码" autoComplete="new-password" /><button className="button primary wide" disabled={backingUp || backupPassword.length < 8} onClick={backup}>{backingUp ? '正在生成…' : '下载加密备份'}</button></section>
     <section className="settings-card"><h3><Globe2 /> 本机与时区</h3><label className="select-label">“今天”的参考时区<select value={referenceTimeZone} onChange={(event) => onReferenceTimeZone(event.target.value)}>{Array.from(new Set([Intl.DateTimeFormat().resolvedOptions().timeZone, trip.trip.defaultTimeZone, ...trip.dayPlans.map((day) => day.timeZone)])).map((zone) => <option key={zone} value={zone}>{zone}{zone === Intl.DateTimeFormat().resolvedOptions().timeZone ? ' · 本机' : ''}</option>)}</select></label><Fact label="本机占用" value={estimate.usage ? `${(estimate.usage / 1024 / 1024).toFixed(1)} MB` : '浏览器未提供'} /><p className="microcopy">事件仍按各自所在地 IANA 时区显示。行前默认本机时区；到达后可切成目的地时区。测试日期开关只在开发构建出现。</p></section>
     <section className="settings-card danger-zone"><h3><Trash2 /> 删除本机数据</h3><p>不会影响源文件或其他设备，但本机笔记会一并删除。</p><button className="button danger wide" onClick={remove}>删除这台设备上的行程</button></section>
     <footer className="app-footer">SpainDaily · schema v{trip.schemaVersion}<br />公开外壳不含真实行程数据</footer>

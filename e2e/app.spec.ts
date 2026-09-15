@@ -69,3 +69,28 @@ test('suggested event time and event state are personal overrides', async ({ pag
   await expect(page.getByRole('button', { name: /机场 → 市区/ })).toContainText('个人调整')
   await expect(page.getByRole('button', { name: /机场 → 市区/ })).toContainText('已完成')
 })
+
+test('full calendar and location actions are available without exposing private query data', async ({ page }) => {
+  await page.getByRole('button', { name: '先用虚构数据看看' }).click()
+  await page.getByRole('button', { name: /演示旅客 A/ }).click()
+  await page.getByRole('button', { name: '打开完整日历' }).click()
+  const calendar = page.getByRole('dialog', { name: '完整日历' })
+  await expect(calendar).toContainText('行前与返程连续显示')
+  await calendar.getByRole('button', { name: /Madrid/ }).click()
+  await page.getByRole('button', { name: /普拉多博物馆/ }).click()
+  await expect(page.getByRole('link', { name: '查看地点' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '从当前位置导航' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '从上一站看路线' })).toBeVisible()
+  await expect(page.getByText('结果未经核验')).toBeVisible()
+})
+
+test('guides can be searched across article content and sources', async ({ page }) => {
+  await page.getByRole('button', { name: '先用虚构数据看看' }).click()
+  await page.getByRole('button', { name: /演示旅客 A/ }).click()
+  await page.getByRole('button', { name: '资料攻略', exact: true }).click()
+  const search = page.getByRole('searchbox', { name: '搜索攻略' })
+  await search.fill('虚构演示数据')
+  await expect(page.getByRole('button', { name: /城市步行小提示/ })).toBeVisible()
+  await search.fill('完全不存在的词')
+  await expect(page.getByText('没有匹配的攻略或来源')).toBeVisible()
+})

@@ -30,6 +30,14 @@ export interface DayPlan {
   eventIds: string[]
   taskIds: string[]
   sourceIds: string[]
+  guidance?: {
+    status: 'suggested'
+    route: string
+    rest: string
+    lighter: string
+    optionalEventIds?: string[]
+    sourceIds: string[]
+  }
 }
 
 export interface EventItem {
@@ -149,6 +157,7 @@ export interface TaskState {
   taskId: string
   complete: boolean
   ignored?: boolean
+  notApplicable?: boolean
   titleOverride?: string
   timeOverride?: string
   custom?: boolean
@@ -164,16 +173,4 @@ export interface NoteState {
   dayPlanId: string
   text: string
   updatedAt: string
-}
-
-export interface StoredTrip {
-  key: 'active'
-  data: TripData
-  importedAt: string
-}
-
-export interface UserState {
-  lastTravelerId?: string
-  referenceTimeZone: string
-  lastBackupAt?: string
 }

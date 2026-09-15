@@ -46,6 +46,10 @@ export const tripDataSchema = z.object({
     eventIds: z.array(id),
     taskIds: z.array(id),
     sourceIds: z.array(id),
+    guidance: z.object({
+      status: z.literal('suggested'), route: z.string(), rest: z.string(), lighter: z.string(),
+      optionalEventIds: z.array(id).optional(), sourceIds: z.array(id),
+    }).optional(),
   })),
   events: z.array(z.object({
     id, dayPlanId: id, date: z.string(), title: z.string(), subtitle: z.string().optional(),
@@ -104,6 +108,8 @@ export const tripDataSchema = z.object({
     item.eventIds.forEach((value) => { if (!events.has(value)) context.addIssue({ code: 'custom', message: `日期 ${item.id} 引用了不存在的事件` }) })
     item.taskIds.forEach((value) => { if (!tasks.has(value)) context.addIssue({ code: 'custom', message: `日期 ${item.id} 引用了不存在的任务` }) })
     item.sourceIds.forEach((value) => { if (!sources.has(value)) context.addIssue({ code: 'custom', message: `日期 ${item.id} 引用了不存在的来源` }) })
+    item.guidance?.sourceIds.forEach((value) => { if (!sources.has(value)) context.addIssue({ code: 'custom', message: `日期建议 ${item.id} 引用了不存在的来源` }) })
+    item.guidance?.optionalEventIds?.forEach((value) => { if (!events.has(value)) context.addIssue({ code: 'custom', message: `日期建议 ${item.id} 引用了不存在的可选事件` }) })
   })
   data.bookings.forEach((item) => {
     item.travelerIds.forEach((value) => { if (!travelers.has(value)) context.addIssue({ code: 'custom', message: `预订 ${item.id} 引用了不存在的旅客` }) })

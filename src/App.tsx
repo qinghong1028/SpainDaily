@@ -10,7 +10,8 @@ import { demoTrip } from './data/demo'
 import { decryptTripPackage, encryptBackup } from './security/package'
 import {
   clearPrivateData, getSetting, importPackageAtomically, loadAttachment, loadNotes, loadTaskStates,
-  loadTrip, saveNote, saveTaskState, setSetting, storageEstimate, storedAttachmentIds,
+  hasStoredPackage, loadSettings, lockPrivateData, saveNote, saveTaskState, setSetting, storageEstimate,
+  storedAttachmentIds, unlockStoredPackage,
 } from './storage/db'
 import { clampTripDate, dateRange, daysBetween, formatDate, formatWeekday, localDateInTimeZone, zonedDateTimeToInstant } from './utils/date'
 import { googleMapsDirections, googleMapsSearch } from './utils/maps'
@@ -33,6 +34,7 @@ const eventIcons = {
 
 function App() {
   const [trip, setTrip] = useState<TripData | null>(null)
+  const [hasVault, setHasVault] = useState(false)
   const [ready, setReady] = useState(false)
   const [travelerId, setTravelerId] = useState<string | null>(null)
   const [lastTravelerId, setLastTravelerId] = useState<string | null>(null)
@@ -45,15 +47,25 @@ function App() {
   const previousTripDate = useRef('')
 
   useEffect(() => {
-    Promise.all([loadTrip(), getSetting<string>('lastTravelerId'), getSetting<string>('referenceTimeZone')])
-      .then(([stored, last, savedTimeZone]) => {
-        setTrip(stored)
-        setLastTravelerId(last)
-        if (savedTimeZone) setReferenceTimeZone(savedTimeZone)
-      })
+    hasStoredPackage()
+      .then(setHasVault)
       .catch((error) => setNotice(error instanceof Error ? error.message : '读取本机数据失败'))
       .finally(() => setReady(true))
   }, [])
+
+  const activateTrip = async (data: TripData) => {
+    const [last, savedTimeZone] = await Promise.all([getSetting<string>('lastTravelerId'), getSetting<string>('referenceTimeZone')])
+    setTrip(data)
+    setTravelerId(null)
+    setLastTravelerId(last)
+    if (savedTimeZone) setReferenceTimeZone(savedTimeZone)
+  }
+
+  const openDemo = async () => {
+    await importPackageAtomically({ data: demoTrip, attachments: new Map(), taskStates: [], notes: [], settings: {} })
+    setHasVault(false)
+    await activateTrip(demoTrip)
+  }
 
   useEffect(() => {
     const onOnline = () => setOnline(true)
@@ -103,8 +115,8 @@ function App() {
   }
 
   if (!ready) return <Splash />
-  if (!trip) return <Welcome onDemo={() => setTrip(demoTrip)} onImported={setTrip} notice={notice} setNotice={setNotice} />
-  if (!travelerId) return <TravelerGate trip={trip} lastTravelerId={lastTravelerId} onChoose={chooseTraveler} onBack={trip.packageId === 'demo-package' ? () => setTrip(null) : undefined} />
+  if (!trip) return <Welcome hasVault={hasVault} onDemo={() => { openDemo().catch(() => setNotice('虚构演示无法打开。')) }} onActivated={async (data) => { setHasVault(true); await activateTrip(data) }} notice={notice} setNotice={setNotice} />
+  if (!travelerId) return <TravelerGate trip={trip} lastTravelerId={lastTravelerId} onChoose={chooseTraveler} onBack={trip.packageId === 'demo-package' ? () => { lockPrivateData(); setTrip(null) } : undefined} />
 
   const traveler = trip.travelers.find((item) => item.id === travelerId)!
 
@@ -127,7 +139,7 @@ function App() {
         {tab === 'today' && <TodayView trip={trip} travelerId={travelerId} date={selectedDate} actualToday={actualToday} returnDate={currentTripDate} nowMs={now.getTime()} referenceTimeZone={referenceTimeZone} onDate={setSelectedDate} setNotice={setNotice} />}
         {tab === 'schedule' && <ScheduleView trip={trip} travelerId={travelerId} actualToday={actualToday} onOpenDay={(date) => { setSelectedDate(date); setTab('today') }} />}
         {tab === 'guides' && <GuidesView trip={trip} />}
-        {tab === 'me' && <MeView trip={trip} travelerId={travelerId} online={online} referenceTimeZone={referenceTimeZone} onReferenceTimeZone={(value) => { setReferenceTimeZone(value); setSetting('referenceTimeZone', value).catch(() => setNotice('参考时区未能保存。')) }} onImported={(data) => { setTrip(data); setTravelerId(null); setTab('today') }} onDeleted={() => { setTrip(null); setTravelerId(null) }} setNotice={setNotice} />}
+        {tab === 'me' && <MeView trip={trip} travelerId={travelerId} online={online} referenceTimeZone={referenceTimeZone} onReferenceTimeZone={(value) => { setReferenceTimeZone(value); setSetting('referenceTimeZone', value).catch(() => setNotice('参考时区未能保存。')) }} onImported={async (data) => { setHasVault(true); await activateTrip(data); setTab('today') }} onLocked={() => { lockPrivateData(); setTrip(null); setTravelerId(null); setLastTravelerId(null); setTab('today') }} onDeleted={() => { setHasVault(false); setTrip(null); setTravelerId(null); setLastTravelerId(null) }} setNotice={setNotice} />}
       </main>
 
       <nav className="bottom-nav" aria-label="主导航">
@@ -144,7 +156,7 @@ function Splash() {
   return <div className="splash"><div className="brand-mark">S</div><p>正在打开今日行程…</p></div>
 }
 
-function Welcome({ onDemo, onImported, notice, setNotice }: { onDemo: () => void; onImported: (data: TripData) => void; notice: string | null; setNotice: (value: string | null) => void }) {
+function Welcome({ hasVault, onDemo, onActivated, notice, setNotice }: { hasVault: boolean; onDemo: () => void; onActivated: (data: TripData) => void | Promise<void>; notice: string | null; setNotice: (value: string | null) => void }) {
   return (
     <div className="welcome">
       <div className="welcome-art" aria-hidden="true"><span>Madrid</span><i /><span>Barcelona</span><i /><span>Granada</span></div>
@@ -154,12 +166,28 @@ function Welcome({ onDemo, onImported, notice, setNotice }: { onDemo: () => void
         <h1>每天只看<br />现在要做的事</h1>
         <p className="welcome-copy">真实姓名、票据和订单不会上传到网站。用密码在这台设备上解锁，之后离线也能查看。</p>
         {notice && <Notice message={notice} onClose={() => setNotice(null)} />}
-        <PackageImporter onImported={onImported} setNotice={setNotice} compact={false} />
+        {hasVault && <VaultUnlocker onUnlocked={onActivated} setNotice={setNotice} />}
+        {hasVault && <p className="import-divider">或更换加密行程包</p>}
+        <PackageImporter onImported={onActivated} setNotice={setNotice} compact={false} />
         <button className="button ghost wide" onClick={onDemo}>先用虚构数据看看</button>
         <div className="privacy-line"><ShieldCheck size={16} /> 网站公开，行程私密，仅存本机</div>
       </div>
     </div>
   )
+}
+
+function VaultUnlocker({ onUnlocked, setNotice }: { onUnlocked: (data: TripData) => void | Promise<void>; setNotice: (value: string | null) => void }) {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const unlock = async () => {
+    setBusy(true); setNotice(null)
+    try {
+      const data = await unlockStoredPackage(password)
+      setPassword('')
+      await onUnlocked(data)
+    } catch (error) { setNotice(error instanceof Error ? error.message : '本机行程解锁失败') } finally { setBusy(false) }
+  }
+  return <div className="vault-unlocker"><p><LockKeyhole size={16} /> 已找到这台设备保存的加密行程</p><input aria-label="本机行程密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入行程包密码" autoComplete="current-password" onKeyDown={(event) => { if (event.key === 'Enter') unlock() }} /><button className="button primary wide" disabled={busy || !password} onClick={unlock}>{busy ? '正在本机解锁…' : '解锁本机行程'}</button></div>
 }
 
 function TravelerGate({ trip, lastTravelerId, onChoose, onBack }: { trip: TripData; lastTravelerId: string | null; onChoose: (id: string) => void; onBack?: () => void }) {
@@ -188,6 +216,7 @@ function TravelerGate({ trip, lastTravelerId, onChoose, onBack }: { trip: TripDa
 function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, referenceTimeZone, onDate, setNotice }: { trip: TripData; travelerId: string; date: string; actualToday: string; returnDate: string; nowMs: number; referenceTimeZone: string; onDate: (date: string) => void; setNotice: (value: string | null) => void }) {
   const [eventStates, setEventStates] = useState<Record<string, TaskState>>({})
   const [calendarOpen, setCalendarOpen] = useState(false)
+  const [nextOpen, setNextOpen] = useState(false)
   const dates = dateRange(trip.trip.preparationStartDate, trip.trip.endDate)
   const day = trip.dayPlans.find((item) => item.date === date && item.travelerIds.includes(travelerId))
   const events = day ? day.eventIds.map((id) => trip.events.find((event) => event.id === id)).filter((event): event is EventItem => Boolean(event && event.travelerIds.includes(travelerId))) : []
@@ -198,6 +227,9 @@ function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, ref
   const dateDelta = daysBetween(actualToday, date)
   const departureDelta = daysBetween(actualToday, trip.trip.startDate)
   const nextEvent = date === actualToday ? events.map((event) => { const time = eventStates[event.id]?.timeOverride || event.startTime; return { event, time, delta: time ? Math.round((zonedDateTimeToInstant(event.date, time, event.timeZone).getTime() - nowMs) / 60000) : -1 } }).filter((item) => item.delta >= 0).sort((a, b) => a.delta - b.delta)[0] : undefined
+  const nextEventIndex = nextEvent ? events.findIndex((item) => item.id === nextEvent.event.id) : -1
+  const nextPreviousEvent = nextEventIndex > 0 ? [...events.slice(0, nextEventIndex)].reverse().find((item) => item.placeId) : undefined
+  const nextPreviousPlace = nextPreviousEvent?.placeId ? trip.places.find((item) => item.id === nextPreviousEvent.placeId) : undefined
   const dayTimeZone = day?.timeZone || referenceTimeZone
   const stripRef = useRef<HTMLDivElement>(null)
 
@@ -222,27 +254,35 @@ function TodayView({ trip, travelerId, date, actualToday, returnDate, nowMs, ref
 
       <div className="timezone-line"><Globe2 size={14} /> 今天按 {referenceTimeZone} 判断{dayTimeZone !== referenceTimeZone && <span> · 当日事件时区 {dayTimeZone}</span>}</div>
 
-      {nextEvent && <div className="next-card"><div><p className="eyebrow">下一项{nextEvent.event.status === 'suggested' ? ' · 建议时间' : ''}</p><strong>{nextEvent.time} · {nextEvent.event.title}</strong><span>{nextEvent.delta < 60 ? `${nextEvent.delta} 分钟后` : `${Math.floor(nextEvent.delta / 60)} 小时 ${nextEvent.delta % 60} 分后`}</span></div><Clock3 /></div>}
-
       <div className="date-strip" ref={stripRef}>
         {dates.map((item) => <button key={item} data-date={item} className={item === date ? 'active' : ''} onClick={() => onDate(item)}><span>{formatWeekday(item)}</span><strong>{Number(item.slice(-2))}</strong></button>)}
       </div>
 
       {!day ? <EmptyDay /> : <>
+        <TaskList travelerId={travelerId} day={day} tasks={tasks as NonNullable<(typeof trip.dailyTasks)[number]>[]} setNotice={setNotice} />
+        {nextEvent && <button className="next-card" onClick={() => setNextOpen(true)}><div><p className="eyebrow">下一项{nextEvent.event.status === 'suggested' ? ' · 建议时间' : ''}</p><strong>{nextEvent.time} · {nextEvent.event.title}</strong><span>{nextEvent.delta < 60 ? `${nextEvent.delta} 分钟后` : `${Math.floor(nextEvent.delta / 60)} 小时 ${nextEvent.delta % 60} 分后`} · 点开查看地点与票据</span></div><ChevronRight /></button>}
+        {day.guidance && <DayGuidanceCard day={day} trip={trip} />}
         {events.length > 0 && <section className="section"><SectionTitle title="今日时间线" count={events.length} /><div className="timeline">{events.map((event, index) => {
           const previousEvent = [...events.slice(0, index)].reverse().find((item) => item.placeId)
           const previousPlace = previousEvent?.placeId ? trip.places.find((item) => item.id === previousEvent.placeId) : undefined
           return <EventCard key={event.id} event={event} trip={trip} travelerId={travelerId} previousPlace={previousPlace} eventState={eventStates[event.id]} onEventState={(state) => setEventStates((current) => ({ ...current, [event.id]: state }))} />
         })}</div></section>}
-        <TaskList travelerId={travelerId} day={day} tasks={tasks as NonNullable<(typeof trip.dailyTasks)[number]>[]} setNotice={setNotice} />
         {stay && <StayTonight event={stay} trip={trip} />}
         <DayNote day={day} travelerId={travelerId} setNotice={setNotice} />
         {tomorrow && <button className="tomorrow-card" onClick={() => onDate(tomorrow.date)}><div><p className="eyebrow">明日预告{tomorrowTasks.length ? ` · ${tomorrowTasks.length} 项需准备` : ''}</p><strong>{formatDate(tomorrow.date)} · {tomorrow.city}</strong><span>{tomorrowTasks[0]?.title || tomorrow.title}</span></div><ChevronRight /></button>}
       </>}
       {calendarOpen && <CalendarSheet trip={trip} travelerId={travelerId} selectedDate={date} actualToday={actualToday} onSelect={(value) => { onDate(value); setCalendarOpen(false) }} onClose={() => setCalendarOpen(false)} />}
+      {nextOpen && nextEvent && <EventSheet event={nextEvent.event} trip={trip} travelerId={travelerId} previousPlace={nextPreviousPlace} eventState={eventStates[nextEvent.event.id]} onEventState={(state) => setEventStates((current) => ({ ...current, [nextEvent.event.id]: state }))} onClose={() => setNextOpen(false)} />}
       {import.meta.env.DEV && <DevClock trip={trip} onDate={onDate} />}
     </div>
   )
+}
+
+function DayGuidanceCard({ day, trip }: { day: DayPlan; trip: TripData }) {
+  if (!day.guidance) return null
+  const sources = day.guidance.sourceIds.map((id) => trip.sources.find((source) => source.id === id)).filter(Boolean) as Source[]
+  const optionalTitles = (day.guidance.optionalEventIds || []).map((id) => trip.events.find((event) => event.id === id)?.title).filter(Boolean)
+  return <details className="day-guidance"><summary><span><Sparkles size={17} /> 今日路线与减负建议</span><StatusBadge status="suggested" /></summary><div><Fact label="顺路走法" value={day.guidance.route} /><Fact label="休息窗口" value={day.guidance.rest} /><Fact label="体力不足时" value={day.guidance.lighter} />{optionalTitles.length > 0 && <Fact label="可选项目" value={optionalTitles.join('、')} />}<SourceBlock sources={sources} /></div></details>
 }
 
 function CalendarSheet({ trip, travelerId, selectedDate, actualToday, onSelect, onClose }: { trip: TripData; travelerId: string; selectedDate: string; actualToday: string; onSelect: (date: string) => void; onClose: () => void }) {
@@ -264,8 +304,10 @@ function CalendarSheet({ trip, travelerId, selectedDate, actualToday, onSelect, 
 
 function StayTonight({ event, trip }: { event: EventItem; trip: TripData }) {
   const place = event.placeId ? trip.places.find((item) => item.id === event.placeId) : undefined
+  const booking = event.bookingId ? trip.bookings.find((item) => item.id === event.bookingId) : undefined
+  const phone = booking?.fields.find((field) => field.label.includes('电话'))?.value
   if (!place) return null
-  return <section className="section"><SectionTitle title="今晚住哪里" icon={MapPin} /><div className="hotel-card"><div><strong>{place.name}</strong><span>{place.address || place.city}</span><StatusBadge status={event.status} /></div><a href={place.googleMapsUrl} target="_blank" rel="noreferrer" aria-label={`导航到 ${place.name}`}><Navigation /></a></div></section>
+  return <section className="section"><SectionTitle title="今晚住哪里" icon={MapPin} /><div className="hotel-card"><div><strong>{place.name}</strong><span>{place.address || place.city}</span><StatusBadge status={event.status} /></div><div className="hotel-actions"><a href={place.googleMapsUrl} target="_blank" rel="noreferrer" aria-label={`导航到 ${place.name}`}><Navigation /></a>{phone && <a href={`tel:${phone.replace(/[^+\d]/g, '')}`} aria-label={`联系 ${place.name}`}><Phone /></a>}</div></div></section>
 }
 
 function EmptyDay() {
@@ -279,7 +321,7 @@ function EventCard({ event, trip, travelerId, previousPlace, eventState, onEvent
     <button className="event-card" onClick={() => setOpen(true)}>
       <div className="event-time">{eventState?.timeOverride || event.startTime || (event.allDay ? '全天' : '—')}<span>{event.endTime ? `–${event.endTime}` : ''}</span></div>
       <div className={`event-icon ${event.kind}`}><Icon size={18} /></div>
-      <div className="event-main"><strong>{event.title}</strong>{event.subtitle && <span>{event.subtitle}</span>}<StatusBadge status={event.status} />{eventState?.timeOverride && <small className="user-override">个人调整</small>}{eventState?.complete && <small className="user-override done-label">已完成</small>}{eventState?.ignored && <small className="user-override">已跳过</small>}</div>
+      <div className="event-main"><strong>{event.title}</strong>{event.subtitle && <span>{event.subtitle}</span>}<StatusBadge status={event.status} />{eventState?.timeOverride && <small className="user-override">个人调整</small>}{eventState?.complete && <small className="user-override done-label">已完成</small>}{eventState?.ignored && <small className="user-override">已跳过</small>}{eventState?.notApplicable && <small className="user-override">不适用</small>}</div>
       <ChevronRight size={18} />
     </button>
     {open && <EventSheet event={event} trip={trip} travelerId={travelerId} previousPlace={previousPlace} eventState={eventState} onEventState={onEventState} onClose={() => setOpen(false)} />}
@@ -295,6 +337,8 @@ function EventSheet({ event, trip, travelerId, previousPlace, eventState, onEven
   const previousDestination = previousPlace ? (previousPlace.address || `${previousPlace.name}, ${previousPlace.city}`) : ''
   const travelMode = ['flight', 'train', 'transfer'].includes(event.kind) ? 'transit' : 'walking'
   const phone = booking?.fields.find((field) => field.label.includes('电话') && !field.sensitive)?.value
+  const travelerNames = event.travelerIds.map((id) => trip.travelers.find((traveler) => traveler.id === id)?.displayName).filter(Boolean).join('、')
+  const duration = event.kind !== 'flight' && event.startTime && event.endTime ? plannedDuration(event.startTime, event.endTime) : ''
   const copyAddress = async () => {
     if (!destination) return
     try {
@@ -308,6 +352,8 @@ function EventSheet({ event, trip, travelerId, previousPlace, eventState, onEven
     <div className="fact-grid">
       <Fact label="当地时间" value={`${event.date}${event.startTime ? ` · ${eventState?.timeOverride || event.startTime}${event.endTime ? `–${event.endTime}` : ''}${eventState?.timeOverride ? '（个人调整）' : ''}` : ''}`} />
       <Fact label="时区" value={event.timeZone} />
+      <Fact label="适用旅客" value={travelerNames || '未标注'} />
+      {duration && <Fact label="计划停留" value={`${duration}（按页面计划时段计算）`} />}
       {place && <Fact label="地点" value={place.address ? `${place.name}\n${place.address}` : place.name} />}
     </div>
     {place && <section className="map-actions" aria-label="地点操作">
@@ -320,7 +366,7 @@ function EventSheet({ event, trip, travelerId, previousPlace, eventState, onEven
         <a className="button" href={weatherSearch(place.city)} target="_blank" rel="noreferrer"><CloudSun size={16} /> 临近再查天气</a>
       </div>
       <p className="map-disclaimer">下列为地图搜索入口，结果未经核验：</p>
-      <div className="nearby-links">{['餐厅', '药店', '洗手间'].map((label) => <a key={label} href={googleMapsSearch(`${label} near ${place.name}, ${place.city}`)} target="_blank" rel="noreferrer">附近{label}</a>)}</div>
+      <div className="nearby-links">{['餐厅', '便利店', '药店', '洗手间'].map((label) => <a key={label} href={googleMapsSearch(`${label} near ${place.name}, ${place.city}`)} target="_blank" rel="noreferrer">附近{label}</a>)}</div>
     </section>}
     {event.actionUrl && (!place || event.actionUrl !== place.googleMapsUrl) && <a className="button wide" href={event.actionUrl} target="_blank" rel="noreferrer">{event.actionLabel || '打开链接'} <ExternalLink size={15} /></a>}
     {booking && <BookingBlock booking={booking} trip={trip} />}
@@ -330,6 +376,16 @@ function EventSheet({ event, trip, travelerId, previousPlace, eventState, onEven
   </Sheet>
 }
 
+function plannedDuration(start: string, end: string): string {
+  const [startHour, startMinute] = start.split(':').map(Number)
+  const [endHour, endMinute] = end.split(':').map(Number)
+  let minutes = endHour * 60 + endMinute - startHour * 60 - startMinute
+  if (minutes < 0) minutes += 24 * 60
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return [hours ? `${hours} 小时` : '', rest ? `${rest} 分钟` : ''].filter(Boolean).join(' ') || '0 分钟'
+}
+
 function weatherSearch(city: string): string {
   const url = new URL('https://www.google.com/search')
   url.searchParams.set('q', `${city} weather`)
@@ -337,7 +393,8 @@ function weatherSearch(city: string): string {
 }
 
 function EventPersonalState({ event, travelerId, eventState, onEventState }: { event: EventItem; travelerId: string; eventState?: TaskState; onEventState: (state: TaskState) => void }) {
-  const [choice, setChoice] = useState<'todo' | 'complete' | 'skipped'>(eventState?.complete ? 'complete' : eventState?.ignored ? 'skipped' : 'todo')
+  type EventChoice = 'todo' | 'complete' | 'skipped' | 'not-applicable'
+  const [choice, setChoice] = useState<EventChoice>(eventState?.complete ? 'complete' : eventState?.ignored ? 'skipped' : eventState?.notApplicable ? 'not-applicable' : 'todo')
   const [text, setText] = useState('')
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const loaded = useRef(false)
@@ -349,9 +406,9 @@ function EventPersonalState({ event, travelerId, eventState, onEventState }: { e
       loaded.current = true
     }).catch(() => setSaveState('error'))
   }, [event.id, travelerId, stateId])
-  const setEventChoice = (value: 'todo' | 'complete' | 'skipped') => {
+  const setEventChoice = (value: EventChoice) => {
     setChoice(value)
-    const state = { ...eventState, key: `${travelerId}:${stateId}`, travelerId, taskId: stateId, complete: value === 'complete', ignored: value === 'skipped', updatedAt: new Date().toISOString() }
+    const state = { ...eventState, key: `${travelerId}:${stateId}`, travelerId, taskId: stateId, complete: value === 'complete', ignored: value === 'skipped', notApplicable: value === 'not-applicable', updatedAt: new Date().toISOString() }
     onEventState(state)
     saveTaskState(state).catch(() => setSaveState('error'))
   }
@@ -359,7 +416,7 @@ function EventPersonalState({ event, travelerId, eventState, onEventState }: { e
     const value = prompt('调整个人建议时间（HH:MM）', eventState?.timeOverride || event.startTime || '')?.trim()
     if (value === undefined) return
     if (value && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) { alert('请输入 00:00–23:59 格式'); return }
-    const state = { ...eventState, key: `${travelerId}:${stateId}`, travelerId, taskId: stateId, complete: eventState?.complete || false, ignored: eventState?.ignored || false, timeOverride: value || undefined, updatedAt: new Date().toISOString() }
+    const state = { ...eventState, key: `${travelerId}:${stateId}`, travelerId, taskId: stateId, complete: eventState?.complete || false, ignored: eventState?.ignored || false, notApplicable: eventState?.notApplicable || false, timeOverride: value || undefined, updatedAt: new Date().toISOString() }
     onEventState(state)
     saveTaskState(state).catch(() => setSaveState('error'))
   }
@@ -369,12 +426,13 @@ function EventPersonalState({ event, travelerId, eventState, onEventState }: { e
     const timer = window.setTimeout(() => saveNote({ key: `${travelerId}:event:${event.id}`, travelerId, dayPlanId: event.dayPlanId, text, updatedAt: new Date().toISOString() }).then(() => setSaveState('saved')).catch(() => setSaveState('error')), 500)
     return () => clearTimeout(timer)
   }, [text, event.id, event.dayPlanId, travelerId])
-  return <section className="detail-section event-personal"><h3>我的状态与备注</h3><div className="choice-row"><button className={choice === 'todo' ? 'active' : ''} onClick={() => setEventChoice('todo')}>待处理</button><button className={choice === 'complete' ? 'active' : ''} onClick={() => setEventChoice('complete')}>已完成</button><button className={choice === 'skipped' ? 'active' : ''} onClick={() => setEventChoice('skipped')}>已跳过</button></div>{event.status === 'suggested' && <button className="button wide adjust-time" onClick={adjustTime}>调整我的建议时间{eventState?.timeOverride ? ` · ${eventState.timeOverride}` : ''}</button>}<textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="这个事件的个人备注…"/><small className={`save-state ${saveState}`}>{saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已保存到本机' : saveState === 'error' ? '保存失败' : '仅当前旅客视图可见'}</small></section>
+  return <section className="detail-section event-personal"><h3>我的状态与备注</h3><div className="choice-row"><button className={choice === 'todo' ? 'active' : ''} onClick={() => setEventChoice('todo')}>待处理</button><button className={choice === 'complete' ? 'active' : ''} onClick={() => setEventChoice('complete')}>已完成</button><button className={choice === 'skipped' ? 'active' : ''} onClick={() => setEventChoice('skipped')}>已跳过</button><button className={choice === 'not-applicable' ? 'active' : ''} onClick={() => setEventChoice('not-applicable')}>不适用</button></div>{event.status === 'suggested' && <button className="button wide adjust-time" onClick={adjustTime}>调整我的建议时间{eventState?.timeOverride ? ` · ${eventState.timeOverride}` : ''}</button>}<textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="这个事件的个人备注…"/><small className={`save-state ${saveState}`}>{saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已加密保存到本机' : saveState === 'error' ? '保存失败' : '仅当前解锁会话可见'}</small></section>
 }
 
 function BookingBlock({ booking, trip }: { booking: Booking; trip: TripData }) {
   const [revealed, setRevealed] = useState<Set<number>>(new Set())
-  return <section className="detail-section"><h3>预订信息</h3><div className="booking-fields">{booking.fields.map((field, index) => {
+  const proof = booking.attachmentIds.length > 0 ? `已附 ${booking.attachmentIds.length} 份原始票据/预订单` : ['pending', 'conflict'].includes(booking.status) ? '尚缺票据或仍需核对' : '已有原文记录，未附票据文件'
+  return <section className="detail-section"><h3>{booking.kind === 'hotel' ? '住宿预订' : booking.kind === 'ticket' ? '门票状态' : '交通票据'}</h3><p className="booking-proof"><StatusBadge status={booking.status} /> {proof}</p><div className="booking-fields">{booking.fields.map((field, index) => {
     const hidden = field.sensitive && !revealed.has(index)
     return <div key={`${field.label}-${index}`} className={field.conflict ? 'field-conflict' : ''}><span>{field.label}{field.conflict && ' · 有冲突'}</span><strong>{hidden ? '••••••••' : field.value}</strong>{field.sensitive && <button onClick={() => setRevealed((current) => { const next = new Set(current); hidden ? next.add(index) : next.delete(index); return next })}>{hidden ? '显示' : '隐藏'}</button>}</div>
   })}</div>{booking.attachmentIds.length > 0 && <AttachmentGrid attachmentIds={booking.attachmentIds} trip={trip} />}</section>
@@ -511,7 +569,7 @@ function GuideSheet({ guide, trip, onClose }: { guide: GuideArticle; trip: TripD
   return <Sheet title={guide.title} onClose={onClose}><p className="guide-summary">{guide.summary}</p><div className="guide-body">{guide.body.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>{place && <a className="button primary wide" href={place.googleMapsUrl} target="_blank" rel="noreferrer"><Navigation size={17} /> 在 Google 地图打开</a>}{guide.attachmentIds && guide.attachmentIds.length > 0 && <AttachmentGrid attachmentIds={guide.attachmentIds} trip={trip} />}<SourceBlock sources={sources} /></Sheet>
 }
 
-function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZone, onImported, onDeleted, setNotice }: { trip: TripData; travelerId: string; online: boolean; referenceTimeZone: string; onReferenceTimeZone: (value: string) => void; onImported: (data: TripData) => void; onDeleted: () => void; setNotice: (value: string | null) => void }) {
+function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZone, onImported, onLocked, onDeleted, setNotice }: { trip: TripData; travelerId: string; online: boolean; referenceTimeZone: string; onReferenceTimeZone: (value: string) => void; onImported: (data: TripData) => void | Promise<void>; onLocked: () => void; onDeleted: () => void; setNotice: (value: string | null) => void }) {
   const [estimate, setEstimate] = useState<{ usage?: number; quota?: number }>({})
   const [backupPassword, setBackupPassword] = useState('')
   const [backingUp, setBackingUp] = useState(false)
@@ -528,10 +586,10 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
   const backup = async () => {
     setBackingUp(true)
     try {
-      const [taskStates, notes] = await Promise.all([loadTaskStates(), loadNotes()])
+      const [taskStates, notes, settings] = await Promise.all([loadTaskStates(), loadNotes(), loadSettings()])
       const attachments = new Map<string, Blob>()
       for (const meta of trip.attachments) { const blob = await loadAttachment(meta.id); if (blob) attachments.set(meta.id, blob) }
-      const blob = await encryptBackup(trip, attachments, backupPassword, { taskStates, notes })
+      const blob = await encryptBackup(trip, attachments, backupPassword, { taskStates, notes, settings })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = `SpainDaily-backup-${new Date().toISOString().slice(0, 10)}.spaintrip`; anchor.click()
       URL.revokeObjectURL(url)
@@ -549,12 +607,13 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
     <section className="settings-card"><h3><FileLock2 /> 更换行程包</h3><p>新包通过完整性校验后才替换现有数据。导入过程失败不会留下半包。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact /></section>
     <section className="settings-card"><h3><Download /> 加密备份</h3><p>导出行程、附件、个人任务状态和笔记。密码不会保存在设备上。{lastBackupAt && <><br />最近备份：{new Date(lastBackupAt).toLocaleString('zh-CN')}</>}</p><input type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="设置至少 8 位备份密码" autoComplete="new-password" /><button className="button primary wide" disabled={backingUp || backupPassword.length < 8} onClick={backup}>{backingUp ? '正在生成…' : '下载加密备份'}</button></section>
     <section className="settings-card"><h3><Globe2 /> 本机与时区</h3><label className="select-label">“今天”的参考时区<select value={referenceTimeZone} onChange={(event) => onReferenceTimeZone(event.target.value)}>{Array.from(new Set([Intl.DateTimeFormat().resolvedOptions().timeZone, trip.trip.defaultTimeZone, ...trip.dayPlans.map((day) => day.timeZone)])).map((zone) => <option key={zone} value={zone}>{zone}{zone === Intl.DateTimeFormat().resolvedOptions().timeZone ? ' · 本机' : ''}</option>)}</select></label><Fact label="本机占用" value={estimate.usage ? `${(estimate.usage / 1024 / 1024).toFixed(1)} MB` : '浏览器未提供'} /><p className="microcopy">事件仍按各自所在地 IANA 时区显示。行前默认本机时区；到达后可切成目的地时区。测试日期开关只在开发构建出现。</p></section>
+    <section className="settings-card"><h3><LockKeyhole /> 锁定私密资料</h3><p>立即清除当前页面内存中的姓名、行程、票据、任务和笔记；本机密文仍保留，下次需要密码重新解锁。</p><button className="button wide" onClick={onLocked}>立即锁定</button></section>
     <section className="settings-card danger-zone"><h3><Trash2 /> 删除本机数据</h3><p>不会影响源文件或其他设备，但本机笔记会一并删除。</p><button className="button danger wide" onClick={remove}>删除这台设备上的行程</button></section>
     <footer className="app-footer">SpainDaily · schema v{trip.schemaVersion}<br />公开外壳不含真实行程数据</footer>
   </div>
 }
 
-function PackageImporter({ onImported, setNotice, compact }: { onImported: (data: TripData) => void; setNotice: (value: string | null) => void; compact: boolean }) {
+function PackageImporter({ onImported, setNotice, compact }: { onImported: (data: TripData) => void | Promise<void>; setNotice: (value: string | null) => void; compact: boolean }) {
   const [file, setFile] = useState<File | null>(null)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -564,8 +623,9 @@ function PackageImporter({ onImported, setNotice, compact }: { onImported: (data
     setBusy(true); setNotice(null)
     try {
       const pkg = await decryptTripPackage(file, password)
-      await importPackageAtomically({ ...pkg, taskStates: pkg.backupState?.taskStates, notes: pkg.backupState?.notes })
-      setPassword(''); onImported(pkg.data)
+      const backupState = pkg.kind === 'backup' ? (pkg.backupState || { taskStates: [], notes: [], settings: {} }) : undefined
+      await importPackageAtomically({ data: pkg.data, attachments: pkg.attachments, encryptedPackage: file, password, ...(backupState || {}) })
+      setPassword(''); await onImported(pkg.data)
     } catch (error) { setNotice(error instanceof Error ? error.message : '行程包导入失败') } finally { setBusy(false) }
   }
   return <div className={`importer ${compact ? 'compact' : ''}`}><input ref={inputRef} type="file" accept=".spaintrip,application/octet-stream" onChange={(event) => setFile(event.target.files?.[0] || null)} hidden />

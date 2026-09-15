@@ -61,13 +61,14 @@ test('personal tasks can be added, edited, ignored, restored and deleted', async
 test('suggested event time and event state are personal overrides', async ({ page }) => {
   await page.getByRole('button', { name: '先用虚构数据看看' }).click()
   await page.getByRole('button', { name: /演示旅客 A/ }).click()
-  await page.getByRole('button', { name: /机场 → 市区/ }).click()
+  const eventCard = page.locator('.event-card').filter({ hasText: '机场 → 市区' })
+  await eventCard.click()
   page.once('dialog', (dialog) => dialog.accept('11:00'))
   await page.getByRole('button', { name: /调整我的建议时间/ }).click()
   await page.getByRole('button', { name: '已完成' }).click()
   await page.getByRole('button', { name: '关闭' }).click()
-  await expect(page.getByRole('button', { name: /机场 → 市区/ })).toContainText('个人调整')
-  await expect(page.getByRole('button', { name: /机场 → 市区/ })).toContainText('已完成')
+  await expect(eventCard).toContainText('个人调整')
+  await expect(eventCard).toContainText('已完成')
 })
 
 test('full calendar and location actions are available without exposing private query data', async ({ page }) => {

@@ -1,4 +1,5 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
+import { z } from 'zod'
 import type { NoteState, TaskState, TripData } from '../domain/types'
 import { migrateTripData } from '../domain/migrations'
 import type { ImportedPackage } from '../storage/db'
@@ -17,9 +18,29 @@ export interface PackageHeader {
   kind: 'trip' | 'backup'
 }
 
-interface BackupState {
-  taskStates?: TaskState[]
-  notes?: NoteState[]
+export interface BackupState {
+  taskStates: TaskState[]
+  notes: NoteState[]
+  settings: Record<string, unknown>
+}
+
+const taskStateSchema = z.object({
+  key: z.string(), travelerId: z.string(), taskId: z.string(), complete: z.boolean(),
+  ignored: z.boolean().optional(), notApplicable: z.boolean().optional(), titleOverride: z.string().optional(),
+  timeOverride: z.string().optional(), custom: z.boolean().optional(), date: z.string().optional(),
+  dayPlanId: z.string().optional(), deleted: z.boolean().optional(), updatedAt: z.string(),
+})
+const noteStateSchema = z.object({ key: z.string(), travelerId: z.string(), dayPlanId: z.string(), text: z.string(), updatedAt: z.string() })
+const backupStateSchema = z.object({
+  taskStates: z.array(taskStateSchema).default([]),
+  notes: z.array(noteStateSchema).default([]),
+  settings: z.record(z.unknown()).default({}),
+})
+
+export function parseBackupState(value: unknown): BackupState {
+  const result = backupStateSchema.safeParse(value)
+  if (!result.success) throw new Error('个人状态结构无效')
+  return result.data
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -65,7 +86,7 @@ function parseEnvelope(bytes: Uint8Array): { header: PackageHeader; headerBytes:
   return { header, headerBytes, ciphertext: bytes.slice(headerEnd) }
 }
 
-export async function decryptTripPackage(file: File, password: string): Promise<ImportedPackage & { backupState?: BackupState }> {
+export async function decryptTripPackage(file: File, password: string): Promise<ImportedPackage & { backupState?: BackupState; kind: PackageHeader['kind'] }> {
   if (!password) throw new Error('请输入行程包密码')
   const bytes = new Uint8Array(await file.arrayBuffer())
   const { header, headerBytes, ciphertext } = parseEnvelope(bytes)
@@ -89,8 +110,8 @@ export async function decryptTripPackage(file: File, password: string): Promise<
     if (await sha256Hex(value) !== meta.sha256) throw new Error(`附件校验失败：${meta.name}`)
     attachments.set(meta.id, new Blob([value], { type: meta.mimeType }))
   }
-  const state = files['state.json'] ? JSON.parse(strFromU8(files['state.json'])) as BackupState : undefined
-  return { data: parsed, attachments, backupState: state }
+  const state = files['state.json'] ? parseBackupState(JSON.parse(strFromU8(files['state.json']))) : undefined
+  return { data: parsed, attachments, backupState: state, kind: header.kind }
 }
 
 export async function encryptBackup(
@@ -106,7 +127,11 @@ export async function encryptBackup(
   }
   for (const meta of data.attachments) {
     const blob = attachments.get(meta.id)
-    if (blob) files[meta.path] = new Uint8Array(await blob.arrayBuffer())
+    if (!blob) throw new Error(`备份缺少附件：${meta.name}`)
+    if (blob.size !== meta.size) throw new Error(`附件大小不一致：${meta.name}`)
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    if (await sha256Hex(bytes) !== meta.sha256) throw new Error(`附件完整性校验失败：${meta.name}`)
+    files[meta.path] = bytes
   }
   const zipped = zipSync(files, { level: 0 })
   const salt = crypto.getRandomValues(new Uint8Array(16))

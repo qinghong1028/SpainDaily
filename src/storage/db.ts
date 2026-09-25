@@ -11,9 +11,17 @@ interface LocalTripRecord {
   vaultId: string
   trip?: TripData
   attachments?: Array<{ id: string; blob: Blob }>
+  attachmentKeys?: string[]
   packageBlob?: Blob
   stateBlob: Blob
   importedAt: string
+}
+
+interface LocalAttachmentRecord {
+  key: string
+  vaultId: string
+  id: string
+  blob: Blob
 }
 
 export interface ImportedPackage {
@@ -46,8 +54,14 @@ function request<T>(value: IDBRequest<T>): Promise<T> {
 function transactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve()
-    transaction.onerror = () => reject(transaction.error || new Error('本机存储事务失败'))
-    transaction.onabort = () => reject(transaction.error || new Error('本机存储事务已取消'))
+    const fail = (fallback: string) => {
+      const cause = transaction.error
+      if (cause?.name === 'QuotaExceededError') reject(new Error('手机可用存储空间不足，请清理空间后重新导入'))
+      else if (cause?.name === 'SecurityError' || cause?.name === 'NotAllowedError') reject(new Error('浏览器阻止了本机存储，请在 Safari 中打开行程页后重试'))
+      else reject(cause || new Error(fallback))
+    }
+    transaction.onerror = () => fail('本机存储事务失败')
+    transaction.onabort = () => fail('本机存储事务已取消')
   })
 }
 
@@ -110,7 +124,18 @@ export async function loadStoredPackage(): Promise<TripData | null> {
   const vault = await loadVault()
   if (!vault?.trip) return null
   const state = vault.stateBlob ? parseBackupState(JSON.parse(await vault.stateBlob.text())) : { taskStates: [], notes: [], settings: {} }
-  replaceSession({ data: vault.trip, attachments: new Map((vault.attachments || []).map(({ id, blob }) => [id, blob])), ...state }, null, vault.vaultId)
+  const attachments = new Map((vault.attachments || []).map(({ id, blob }) => [id, blob]))
+  if (vault.attachmentKeys?.length) {
+    const db = await openDatabase()
+    try {
+      const transaction = db.transaction('vault', 'readonly')
+      const store = transaction.objectStore('vault')
+      const records = await Promise.all(vault.attachmentKeys.map((key) => request(store.get(key) as IDBRequest<LocalAttachmentRecord | undefined>)))
+      records.forEach((record) => { if (record) attachments.set(record.id, record.blob) })
+      await transactionDone(transaction)
+    } finally { db.close() }
+  }
+  replaceSession({ data: vault.trip, attachments, ...state }, null, vault.vaultId)
   return vault.trip
 }
 
@@ -137,15 +162,33 @@ export async function importPackageAtomically(pkg: ImportedPackage): Promise<voi
   if (pkg.persistLocally) {
     const stateBlob = new Blob([JSON.stringify({ taskStates, notes, settings })], { type: 'application/json' })
     const vaultId = crypto.randomUUID()
-    const record: LocalTripRecord = {
-      key: VAULT_KEY, vaultId, trip: pkg.data,
-      attachments: Array.from(pkg.attachments, ([id, blob]) => ({ id, blob })),
-      stateBlob, importedAt: new Date().toISOString(),
-    }
+    const attachmentKeys = Array.from(pkg.attachments.keys(), (id) => `attachment:${vaultId}:${id}`)
     const db = await openDatabase()
-    const transaction = db.transaction('vault', 'readwrite', { durability: 'strict' })
-    transaction.objectStore('vault').put(record)
-    try { await transactionDone(transaction) } finally { db.close() }
+    const writtenKeys: string[] = []
+    try {
+      for (const [id, blob] of pkg.attachments) {
+        const transaction = db.transaction('vault', 'readwrite')
+        transaction.objectStore('vault').put({ key: `attachment:${vaultId}:${id}`, vaultId, id, blob } satisfies LocalAttachmentRecord)
+        await transactionDone(transaction)
+        writtenKeys.push(`attachment:${vaultId}:${id}`)
+      }
+      const record: LocalTripRecord = {
+        key: VAULT_KEY, vaultId, trip: pkg.data, attachmentKeys,
+        stateBlob, importedAt: new Date().toISOString(),
+      }
+      const transaction = db.transaction('vault', 'readwrite')
+      transaction.objectStore('vault').put(record)
+      await transactionDone(transaction)
+    } catch (error) {
+      for (const key of writtenKeys) {
+        try {
+          const cleanup = db.transaction('vault', 'readwrite')
+          cleanup.objectStore('vault').delete(key)
+          await transactionDone(cleanup)
+        } catch { /* Best effort: the active manifest is unchanged, so partial data stays unused. */ }
+      }
+      throw error
+    } finally { db.close() }
     replaceSession(next, null, vaultId)
     return
   }
@@ -159,7 +202,7 @@ export async function importPackageAtomically(pkg: ImportedPackage): Promise<voi
       importedAt: new Date().toISOString(),
     }
     const db = await openDatabase()
-    const transaction = db.transaction('vault', 'readwrite', { durability: 'strict' })
+    const transaction = db.transaction('vault', 'readwrite')
     transaction.objectStore('vault').put(record)
     try { await transactionDone(transaction) } finally { db.close() }
     replaceSession(next, cipher, vaultId)

@@ -42,6 +42,18 @@ test('all four bottom tabs are reachable', async ({ page }) => {
   }
 })
 
+test('offline check has a touch-sized button and confirms each check', async ({ page }) => {
+  await page.getByRole('button', { name: '先用虚构数据看看' }).click()
+  await expect(page.getByRole('button', { name: /切换查看人，当前演示旅客 A/ })).toBeVisible()
+  await page.getByRole('button', { name: '我的', exact: true }).click()
+  const check = page.getByRole('button', { name: '重新检查离线资料' })
+  await expect(check).toBeVisible()
+  expect((await check.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+  await check.click()
+  await expect(page.getByText('上次检查：', { exact: false })).toBeVisible()
+  await expect(page.getByText(/附件完整，但程序离线缓存尚未完成|完整：程序与 0 个附件已存本机/)).toBeVisible()
+})
+
 test('personal tasks can be added, edited, ignored, restored and deleted', async ({ page }) => {
   await page.getByRole('button', { name: '先用虚构数据看看' }).click()
   await page.getByRole('button', { name: /演示旅客 A/ }).click()

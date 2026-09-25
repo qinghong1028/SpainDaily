@@ -172,6 +172,8 @@ a { color: inherit; }
 .settings-card input:focus, .importer input:focus { border-color: var(--green); }
 .status-card { display: flex; align-items: center; gap: 13px; }
 .status-card p { margin: 3px 0 0; }
+.offline-check-button { display: block; min-height: 44px; margin-top: 9px; padding: 8px 14px; border: 1px solid #e9a99b; border-radius: 12px; background: #fff3ee; color: var(--red); font-size: 12px; font-weight: 700; cursor: pointer; }
+.offline-check-button:disabled { opacity: .65; cursor: wait; }
 .online-dot, .offline-dot { display: grid; place-items: center; flex: 0 0 42px; width: 42px; height: 42px; border-radius: 50%; background: #ddecdf; color: #247048; }
 .offline-dot { background: #eee5d8; color: #756b5e; }
 .danger-zone { border-color: #f0c7bc; }

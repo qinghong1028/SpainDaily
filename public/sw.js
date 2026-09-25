@@ -1,4 +1,4 @@
-const CACHE = 'spaindaily-shell-v6'
+const CACHE = 'spaindaily-shell-v7'
 const rootUrl = new URL('./', self.location.href)
 
 function shellAssets(html) {

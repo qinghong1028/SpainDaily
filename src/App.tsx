@@ -32,6 +32,28 @@ const eventIcons = {
   transfer: Navigation, meeting: UsersRound, free: Clock3, prep: ListChecks,
 }
 
+async function offlineShellReady(): Promise<boolean> {
+  if (!import.meta.env.PROD) return true
+  if (!('serviceWorker' in navigator) || !('caches' in window)) return false
+  try {
+    return await Promise.race([
+      navigator.serviceWorker.ready.then(async (registration) => {
+        if (!registration.active) return false
+        const version = new URL(registration.active.scriptURL).searchParams.get('v')
+        if (!version) return false
+        const cache = await caches.open(`spaindaily-shell-v${version}`)
+        const root = new URL(import.meta.env.BASE_URL, location.origin).href
+        if (!await cache.match(root)) return false
+        const assets = Array.from(document.querySelectorAll<HTMLScriptElement | HTMLLinkElement>('script[src],link[rel="stylesheet"][href]'))
+          .map((item) => item instanceof HTMLScriptElement ? item.src : item.href)
+        const cached = await Promise.all(assets.map((url) => cache.match(url)))
+        return cached.every(Boolean)
+      }),
+      new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 5000)),
+    ])
+  } catch { return false }
+}
+
 function App() {
   const [trip, setTrip] = useState<TripData | null>(null)
   const [ready, setReady] = useState(false)
@@ -547,10 +569,10 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
   const checkOffline = async () => {
     const stored = new Set(await storedAttachmentIds())
     const missing = trip.attachments.filter((item) => !stored.has(item.id))
-    const shellReady = !import.meta.env.PROD || ('serviceWorker' in navigator && await Promise.race([navigator.serviceWorker.ready.then(() => true), new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 3000))]))
+    const shellReady = await offlineShellReady()
     setOfflineStatus(missing.length ? `缺少 ${missing.length} 个附件，请重新导入` : shellReady ? `完整：程序与 ${trip.attachments.length} 个附件已存本机` : '附件完整，但程序离线缓存尚未完成')
   }
-  useEffect(() => { storageEstimate().then(setEstimate); getSetting<string>('lastBackupAt').then((value) => setLastBackupAt(value || '')); checkOffline().catch(() => setOfflineStatus('检查失败')) }, [trip.packageId])
+  useEffect(() => { storageEstimate().then(setEstimate); getSetting<string>('lastBackupAt').then((value) => setLastBackupAt(value || '')); checkOffline().catch(() => setOfflineStatus('检查失败')) }, [trip])
   const selectedTraveler = trip.travelers.find((item) => item.id === travelerId)
   const backup = async () => {
     setBackingUp(true)
@@ -572,7 +594,7 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
     try { await clearPrivateData(); onDeleted() } catch { setNotice('删除失败，请关闭其他打开的 SpainDaily 页面后重试。') }
   }
   return <div className="page"><PageHeading eyebrow="本机设置" title="我的" description={`${selectedTraveler?.displayName || '个人'}的行程`} />
-    <section className="settings-card status-card"><div className={online ? 'online-dot' : 'offline-dot'}>{online ? <Wifi /> : <WifiOff />}</div><div><strong>{online ? '网络已连接' : '当前离线'}</strong><p>{offlineStatus}</p><button className="text-action" onClick={() => checkOffline().catch(() => setOfflineStatus('检查失败'))}>重新检查离线资料</button></div></section>
+    <section className="settings-card status-card"><div className={online ? 'online-dot' : 'offline-dot'}>{online ? <Wifi /> : <WifiOff />}</div><div><strong>{online ? '网络已连接' : '当前离线'}</strong><p>{offlineStatus}</p><button className="text-action" onClick={() => checkOffline().catch(() => setOfflineStatus('检查失败'))}>重新检查离线资料</button><p className="microcopy">请从桌面图标联网打开，在这里看到“完整”后再测试飞行模式。</p></div></section>
     <section className="settings-card"><h3><FileText /> 更换个人行程</h3><p>资料在本机校验后保存；备注和待办状态保留在这台设备。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact existingTrip={trip} /></section>
     <section className="settings-card"><h3><Download /> 本机备份</h3><p>导出行程、附件、待办和备注。备份文件未加密，请妥善保管。{lastBackupAt && <><br />最近备份：{new Date(lastBackupAt).toLocaleString('zh-CN')}</>}</p><button className="button primary wide" disabled={backingUp} onClick={backup}>{backingUp ? '正在生成…' : '下载本机备份'}</button></section>
     <section className="settings-card"><h3><Globe2 /> 本机与时区</h3><label className="select-label">“今天”的参考时区<select value={referenceTimeZone} onChange={(event) => onReferenceTimeZone(event.target.value)}>{Array.from(new Set([Intl.DateTimeFormat().resolvedOptions().timeZone, trip.trip.defaultTimeZone, ...trip.dayPlans.map((day) => day.timeZone)])).map((zone) => <option key={zone} value={zone}>{zone}{zone === Intl.DateTimeFormat().resolvedOptions().timeZone ? ' · 本机' : ''}</option>)}</select></label><Fact label="本机占用" value={estimate.usage ? `${(estimate.usage / 1024 / 1024).toFixed(1)} MB` : '浏览器未提供'} /><p className="microcopy">事件仍按各自所在地 IANA 时区显示。行前默认本机时区；到达后可切成目的地时区。测试日期开关只在开发构建出现。</p></section>

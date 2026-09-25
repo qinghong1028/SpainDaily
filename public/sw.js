@@ -1,16 +1,14 @@
-const CACHE = 'spaindaily-shell-v4'
-const STATIC_SHELL = ['./manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png']
+const CACHE = 'spaindaily-shell-v6'
 const rootUrl = new URL('./', self.location.href)
 
 function shellAssets(html) {
   return [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
     .map((match) => new URL(match[1], rootUrl).href)
-    .filter((url) => new URL(url).origin === self.location.origin)
+    .filter((url) => new URL(url).origin === self.location.origin && /\.(?:js|css)$/.test(new URL(url).pathname))
 }
 
 async function cacheCompleteShell() {
   const cache = await caches.open(CACHE)
-  await cache.addAll(STATIC_SHELL)
   const response = await fetch(rootUrl)
   if (!response.ok) throw new Error('Unable to download app shell')
   await cache.addAll([...new Set(shellAssets(await response.clone().text()))])
@@ -45,7 +43,7 @@ self.addEventListener('fetch', (event) => {
         await cache.put(rootUrl, response.clone())
         return response
       } catch {
-        return (await cache.match(rootUrl)) || Response.error()
+        return (await cache.match(rootUrl, { ignoreVary: true })) || Response.error()
       }
     })())
     return
@@ -53,7 +51,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE)
-    const cached = await cache.match(event.request)
+    const cached = await cache.match(event.request, { ignoreVary: true })
     if (cached) return cached
     try {
       const response = await fetch(event.request)

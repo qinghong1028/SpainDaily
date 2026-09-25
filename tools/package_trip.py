@@ -69,6 +69,8 @@ def filter_traveler(trip: dict, traveler_id: str) -> dict:
     trip["dailyTasks"] = tasks
     trip["bookings"] = bookings
     trip["attachments"] = [row for row in trip.get("attachments", []) if row.get("id") in attachment_ids]
+    for row in trip["attachments"]:
+        row["travelerIds"] = [traveler_id]
     return trip
 
 

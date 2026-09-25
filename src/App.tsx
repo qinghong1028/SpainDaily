@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  CalendarDays, Check, ChevronRight, CircleAlert, Clock3, CloudSun, Copy, Download,
+  CalendarDays, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CloudSun, Copy, Download,
   ExternalLink, FileLock2, FileText, Globe2, Languages, ListChecks, LockKeyhole,
   MapPin, Navigation, NotebookPen, Phone, Plane, RotateCcw, Search, ShieldCheck, Sparkles,
   TrainFront, Trash2, UserRound, UsersRound, Wifi, WifiOff, X, ZoomIn,
@@ -36,6 +36,7 @@ function App() {
   const [trip, setTrip] = useState<TripData | null>(null)
   const [ready, setReady] = useState(false)
   const [travelerId, setTravelerId] = useState<string | null>(null)
+  const [travelerPickerOpen, setTravelerPickerOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('today')
   const [selectedDate, setSelectedDate] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
@@ -54,8 +55,9 @@ function App() {
   }, [])
 
   const activateTrip = async (data: TripData) => {
-    const [savedTimeZone] = await Promise.all([getSetting<string>('referenceTimeZone')])
-    const personalTraveler = data.travelers.find((item) => item.shortName === 'YY') || data.travelers[0]
+    const [savedTimeZone, savedTravelerId] = await Promise.all([getSetting<string>('referenceTimeZone'), getSetting<string>('selectedTravelerId')])
+    const personalTraveler = data.travelers.find((item) => item.id === savedTravelerId)
+      || data.travelers.find((item) => item.shortName === 'YY') || data.travelers[0]
     const timeZone = savedTimeZone || referenceTimeZone
     const today = localDateInTimeZone(timeZone, new Date())
     setSelectedDate(clampTripDate(today, data.trip.preparationStartDate, data.trip.endDate))
@@ -123,16 +125,25 @@ function App() {
           <p className="eyebrow">{trip.packageId === 'demo-package' ? '虚构演示 · ' : ''}{online ? '在线' : '离线可用'}</p>
           <h1>{trip.trip.title}</h1>
         </div>
-        <span className="traveler-chip" aria-label="个人行程">
+        <button className="traveler-chip" aria-label={`切换查看人，当前${traveler.displayName}`} onClick={() => setTravelerPickerOpen(true)}>
           <span style={{ background: traveler.avatarColor }}>{traveler.shortName}</span>
           {traveler.displayName}
-        </span>
+          <ChevronDown size={15} aria-hidden="true" />
+        </button>
       </header>
 
       {notice && <Notice message={notice} onClose={() => setNotice(null)} />}
+      {travelerPickerOpen && <Sheet title="查看谁的行程" onClose={() => setTravelerPickerOpen(false)}>
+        {trip.travelers.length === 1 && <p className="traveler-hint">当前行程包只包含一人。导入多人行程包后即可在这里切换。</p>}
+        <div className="traveler-options">{trip.travelers.map((person) => <button key={person.id} className="traveler-option" aria-pressed={person.id === travelerId} onClick={() => {
+          setTravelerId(person.id)
+          setTravelerPickerOpen(false)
+          setSetting('selectedTravelerId', person.id).catch(() => setNotice('查看人未能保存，下次打开需要重新选择。'))
+        }}><span style={{ background: person.avatarColor }}>{person.shortName}</span><strong>{person.displayName}</strong>{person.id === travelerId && <Check size={18} />}</button>)}</div>
+      </Sheet>}
 
       <main>
-        {tab === 'today' && <TodayView trip={trip} travelerId={travelerId} date={selectedDate} actualToday={actualToday} returnDate={currentTripDate} nowMs={now.getTime()} referenceTimeZone={referenceTimeZone} onDate={setSelectedDate} setNotice={setNotice} />}
+        {tab === 'today' && <TodayView key={travelerId} trip={trip} travelerId={travelerId} date={selectedDate} actualToday={actualToday} returnDate={currentTripDate} nowMs={now.getTime()} referenceTimeZone={referenceTimeZone} onDate={setSelectedDate} setNotice={setNotice} />}
         {tab === 'schedule' && <ScheduleView trip={trip} travelerId={travelerId} actualToday={actualToday} onOpenDay={(date) => { setSelectedDate(date); setTab('today') }} />}
         {tab === 'guides' && <GuidesView trip={trip} />}
         {tab === 'me' && <MeView trip={trip} travelerId={travelerId} online={online} referenceTimeZone={referenceTimeZone} onReferenceTimeZone={(value) => { setReferenceTimeZone(value); setSetting('referenceTimeZone', value).catch(() => setNotice('参考时区未能保存。')) }} onImported={async (data) => { await activateTrip(data); setTab('today') }} onDeleted={() => { setTrip(null); setTravelerId(null) }} setNotice={setNotice} />}

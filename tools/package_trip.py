@@ -18,10 +18,6 @@ import zipfile
 from getpass import getpass
 from pathlib import Path
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-
 MAGIC = b"SPAINDAILY1\n"
 ITERATIONS = 310_000
 
@@ -38,6 +34,9 @@ def arguments():
 
 
 def derive(password: str, salt: bytes) -> bytes:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
     return PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=ITERATIONS).derive(password.encode("utf-8"))
 
 
@@ -111,6 +110,7 @@ def main():
     if len(password) < 8:
         raise SystemExit("Password must contain at least 8 characters")
     salt, iv = os.urandom(16), os.urandom(12)
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     header = {
         "packageFormat": 1,
         "schemaVersion": 1,

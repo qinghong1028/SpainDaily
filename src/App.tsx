@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  ArrowLeft, CalendarDays, Check, ChevronRight, CircleAlert, Clock3, CloudSun, Copy, Download,
-  ExternalLink, FileLock2, FileText, Globe2, Info, Languages, ListChecks, LockKeyhole,
+  CalendarDays, Check, ChevronRight, CircleAlert, Clock3, CloudSun, Copy, Download,
+  ExternalLink, FileLock2, FileText, Globe2, Languages, ListChecks, LockKeyhole,
   MapPin, Navigation, NotebookPen, Phone, Plane, RotateCcw, Search, ShieldCheck, Sparkles,
   TrainFront, Trash2, UserRound, UsersRound, Wifi, WifiOff, X, ZoomIn,
 } from 'lucide-react'
 import type { AttachmentMeta, Booking, DayPlan, EventItem, FactStatus, GuideArticle, NoteState, Place, Source, TaskState, TripData } from './domain/types'
 import { demoTrip } from './data/demo'
 import { taskChangeSummary } from './domain/taskChanges'
-import { decryptTripPackage, encryptBackup } from './security/package'
+import { createLocalPackage, importLocalPackage } from './security/package'
 import {
   clearPrivateData, getSetting, importPackageAtomically, loadAttachment, loadNotes, loadTaskStates,
-  hasStoredPackage, loadSettings, lockPrivateData, saveNote, saveTaskState, setSetting, storageEstimate,
-  storedAttachmentIds, unlockStoredPackage,
+  loadSettings, loadStoredPackage, saveNote, saveTaskState, setSetting, storageEstimate, storedAttachmentIds,
 } from './storage/db'
 import { clampTripDate, dateRange, daysBetween, formatDate, formatWeekday, localDateInTimeZone, zonedDateTimeToInstant } from './utils/date'
 import { googleMapsDirections, googleMapsSearch } from './utils/maps'
@@ -35,10 +34,8 @@ const eventIcons = {
 
 function App() {
   const [trip, setTrip] = useState<TripData | null>(null)
-  const [hasVault, setHasVault] = useState(false)
   const [ready, setReady] = useState(false)
   const [travelerId, setTravelerId] = useState<string | null>(null)
-  const [lastTravelerId, setLastTravelerId] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('today')
   const [selectedDate, setSelectedDate] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
@@ -48,23 +45,24 @@ function App() {
   const previousTripDate = useRef('')
 
   useEffect(() => {
-    hasStoredPackage()
-      .then(setHasVault)
+    loadStoredPackage()
+      .then(async (storedTrip) => {
+        if (storedTrip) await activateTrip(storedTrip)
+      })
       .catch((error) => setNotice(error instanceof Error ? error.message : '读取本机数据失败'))
       .finally(() => setReady(true))
   }, [])
 
   const activateTrip = async (data: TripData) => {
-    const [last, savedTimeZone] = await Promise.all([getSetting<string>('lastTravelerId'), getSetting<string>('referenceTimeZone')])
+    const [savedTimeZone] = await Promise.all([getSetting<string>('referenceTimeZone')])
+    const personalTraveler = data.travelers.find((item) => item.shortName === 'YY') || data.travelers[0]
     setTrip(data)
-    setTravelerId(null)
-    setLastTravelerId(last)
+    setTravelerId(personalTraveler?.id || null)
     if (savedTimeZone) setReferenceTimeZone(savedTimeZone)
   }
 
   const openDemo = async () => {
     await importPackageAtomically({ data: demoTrip, attachments: new Map(), taskStates: [], notes: [], settings: {} })
-    setHasVault(false)
     await activateTrip(demoTrip)
   }
 
@@ -109,15 +107,9 @@ function App() {
     previousTripDate.current = currentTripDate
   }, [currentTripDate])
 
-  const chooseTraveler = (id: string) => {
-    setTravelerId(id)
-    setLastTravelerId(id)
-    setSetting('lastTravelerId', id).catch(() => setNotice('已进入行程，但未能记住上次选择。'))
-  }
-
   if (!ready) return <Splash />
-  if (!trip) return <Welcome hasVault={hasVault} onDemo={() => { openDemo().catch(() => setNotice('虚构演示无法打开。')) }} onActivated={async (data) => { setHasVault(true); await activateTrip(data); setTab('today') }} notice={notice} setNotice={setNotice} />
-  if (!travelerId) return <TravelerGate trip={trip} lastTravelerId={lastTravelerId} onChoose={chooseTraveler} onBack={trip.packageId === 'demo-package' ? () => { lockPrivateData(); setTrip(null) } : undefined} />
+  if (!trip) return <Welcome onDemo={() => { openDemo().catch(() => setNotice('虚构演示无法打开。')) }} onActivated={async (data) => { await activateTrip(data); setTab('today') }} notice={notice} setNotice={setNotice} />
+  if (!travelerId) return <Welcome onDemo={() => { openDemo().catch(() => setNotice('虚构演示无法打开。')) }} onActivated={async (data) => { await activateTrip(data); setTab('today') }} notice={notice} setNotice={setNotice} />
 
   const traveler = trip.travelers.find((item) => item.id === travelerId)!
 
@@ -128,10 +120,10 @@ function App() {
           <p className="eyebrow">{trip.packageId === 'demo-package' ? '虚构演示 · ' : ''}{online ? '在线' : '离线可用'}</p>
           <h1>{trip.trip.title}</h1>
         </div>
-        <button className="traveler-chip" onClick={() => { setTravelerId(null); setTab('today') }} aria-label="切换旅客">
+        <span className="traveler-chip" aria-label="个人行程">
           <span style={{ background: traveler.avatarColor }}>{traveler.shortName}</span>
           {traveler.displayName}
-        </button>
+        </span>
       </header>
 
       {notice && <Notice message={notice} onClose={() => setNotice(null)} />}
@@ -140,7 +132,7 @@ function App() {
         {tab === 'today' && <TodayView trip={trip} travelerId={travelerId} date={selectedDate} actualToday={actualToday} returnDate={currentTripDate} nowMs={now.getTime()} referenceTimeZone={referenceTimeZone} onDate={setSelectedDate} setNotice={setNotice} />}
         {tab === 'schedule' && <ScheduleView trip={trip} travelerId={travelerId} actualToday={actualToday} onOpenDay={(date) => { setSelectedDate(date); setTab('today') }} />}
         {tab === 'guides' && <GuidesView trip={trip} />}
-        {tab === 'me' && <MeView trip={trip} travelerId={travelerId} online={online} referenceTimeZone={referenceTimeZone} onReferenceTimeZone={(value) => { setReferenceTimeZone(value); setSetting('referenceTimeZone', value).catch(() => setNotice('参考时区未能保存。')) }} onImported={async (data) => { setHasVault(true); await activateTrip(data); setTab('today') }} onLocked={() => { lockPrivateData(); setTrip(null); setTravelerId(null); setLastTravelerId(null); setTab('today') }} onDeleted={() => { setHasVault(false); setTrip(null); setTravelerId(null); setLastTravelerId(null) }} setNotice={setNotice} />}
+        {tab === 'me' && <MeView trip={trip} travelerId={travelerId} online={online} referenceTimeZone={referenceTimeZone} onReferenceTimeZone={(value) => { setReferenceTimeZone(value); setSetting('referenceTimeZone', value).catch(() => setNotice('参考时区未能保存。')) }} onImported={async (data) => { await activateTrip(data); setTab('today') }} onDeleted={() => { setTrip(null); setTravelerId(null) }} setNotice={setNotice} />}
       </main>
 
       <nav className="bottom-nav" aria-label="主导航">
@@ -157,7 +149,7 @@ function Splash() {
   return <div className="splash"><div className="brand-mark">S</div><p>正在打开今日行程…</p></div>
 }
 
-function Welcome({ hasVault, onDemo, onActivated, notice, setNotice }: { hasVault: boolean; onDemo: () => void; onActivated: (data: TripData) => void | Promise<void>; notice: string | null; setNotice: (value: string | null) => void }) {
+function Welcome({ onDemo, onActivated, notice, setNotice }: { onDemo: () => void; onActivated: (data: TripData) => void | Promise<void>; notice: string | null; setNotice: (value: string | null) => void }) {
   return (
     <div className="welcome">
       <div className="welcome-art" aria-hidden="true"><span>Madrid</span><i /><span>Barcelona</span><i /><span>Granada</span></div>
@@ -165,51 +157,12 @@ function Welcome({ hasVault, onDemo, onActivated, notice, setNotice }: { hasVaul
         <div className="brand-mark">S</div>
         <p className="eyebrow">你的离线旅行日历</p>
         <h1>每天只看<br />现在要做的事</h1>
-        <p className="welcome-copy">真实姓名、票据和订单不会上传到网站。用密码在这台设备上解锁，之后离线也能查看。</p>
+        <p className="welcome-copy">这是你的个人行程。资料保存在这台手机的浏览器里，不需要密码；首次导入后，离线也能查看。</p>
         {notice && <Notice message={notice} onClose={() => setNotice(null)} />}
-        {hasVault && <VaultUnlocker onUnlocked={onActivated} setNotice={setNotice} />}
-        {hasVault && <p className="import-divider">或更换加密行程包</p>}
         <PackageImporter onImported={onActivated} setNotice={setNotice} compact={false} />
         <button className="button ghost wide" onClick={onDemo}>先用虚构数据看看</button>
-        <div className="privacy-line"><ShieldCheck size={16} /> 网站公开，行程私密，仅存本机</div>
+        <div className="privacy-line"><ShieldCheck size={16} /> 行程只存本机，未加密；请使用自己的设备</div>
       </div>
-    </div>
-  )
-}
-
-function VaultUnlocker({ onUnlocked, setNotice }: { onUnlocked: (data: TripData) => void | Promise<void>; setNotice: (value: string | null) => void }) {
-  const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const unlock = async () => {
-    setBusy(true); setNotice(null)
-    try {
-      const data = await unlockStoredPackage(password)
-      setPassword('')
-      await onUnlocked(data)
-    } catch (error) { setNotice(error instanceof Error ? error.message : '本机行程解锁失败') } finally { setBusy(false) }
-  }
-  return <div className="vault-unlocker"><p><LockKeyhole size={16} /> 已找到这台设备保存的加密行程</p><input aria-label="本机行程密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入行程包密码" autoComplete="current-password" onKeyDown={(event) => { if (event.key === 'Enter') unlock() }} /><button className="button primary wide" disabled={busy || !password} onClick={unlock}>{busy ? '正在本机解锁…' : '解锁本机行程'}</button></div>
-}
-
-function TravelerGate({ trip, lastTravelerId, onChoose, onBack }: { trip: TripData; lastTravelerId: string | null; onChoose: (id: string) => void; onBack?: () => void }) {
-  return (
-    <div className="gate">
-      {onBack && <button className="icon-button gate-back" onClick={onBack} aria-label="返回"><ArrowLeft /></button>}
-      <div className="gate-copy">
-        <p className="eyebrow">{trip.trip.subtitle || '旅程已在本机解锁'}</p>
-        <h1>今天是谁在看？</h1>
-        <p>每次重新打开都要确认。任务完成状态和笔记会按旅客分别保存。</p>
-      </div>
-      <div className="traveler-list">
-        {trip.travelers.map((traveler) => (
-          <button key={traveler.id} className={`traveler-card ${traveler.id === lastTravelerId ? 'recent' : ''}`} onClick={() => onChoose(traveler.id)}>
-            <span className="avatar" style={{ background: traveler.avatarColor }}>{traveler.shortName}</span>
-            <span><strong>{traveler.displayName}</strong>{traveler.id === lastTravelerId && <small>上次选择</small>}</span>
-            <ChevronRight />
-          </button>
-        ))}
-      </div>
-      <p className="gate-note"><Info size={15} /> 这只是本机视图切换，不是身份验证。</p>
     </div>
   )
 }
@@ -428,7 +381,7 @@ function EventPersonalState({ event, travelerId, eventState, onEventState }: { e
     const timer = window.setTimeout(() => saveNote({ key: `${travelerId}:event:${event.id}`, travelerId, dayPlanId: event.dayPlanId, text, updatedAt: new Date().toISOString() }).then(() => setSaveState('saved')).catch(() => setSaveState('error')), 500)
     return () => clearTimeout(timer)
   }, [text, event.id, event.dayPlanId, travelerId])
-  return <section className="detail-section event-personal"><h3>我的状态与备注</h3><div className="choice-row"><button className={choice === 'todo' ? 'active' : ''} onClick={() => setEventChoice('todo')}>待处理</button><button className={choice === 'complete' ? 'active' : ''} onClick={() => setEventChoice('complete')}>已完成</button><button className={choice === 'skipped' ? 'active' : ''} onClick={() => setEventChoice('skipped')}>已跳过</button><button className={choice === 'not-applicable' ? 'active' : ''} onClick={() => setEventChoice('not-applicable')}>不适用</button></div>{event.status === 'suggested' && <button className="button wide adjust-time" onClick={adjustTime}>调整我的建议时间{eventState?.timeOverride ? ` · ${eventState.timeOverride}` : ''}</button>}<textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="这个事件的个人备注…"/><small className={`save-state ${saveState}`}>{saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已加密保存到本机' : saveState === 'error' ? '保存失败' : '仅当前解锁会话可见'}</small></section>
+  return <section className="detail-section event-personal"><h3>我的状态与备注</h3><div className="choice-row"><button className={choice === 'todo' ? 'active' : ''} onClick={() => setEventChoice('todo')}>待处理</button><button className={choice === 'complete' ? 'active' : ''} onClick={() => setEventChoice('complete')}>已完成</button><button className={choice === 'skipped' ? 'active' : ''} onClick={() => setEventChoice('skipped')}>已跳过</button><button className={choice === 'not-applicable' ? 'active' : ''} onClick={() => setEventChoice('not-applicable')}>不适用</button></div>{event.status === 'suggested' && <button className="button wide adjust-time" onClick={adjustTime}>调整我的建议时间{eventState?.timeOverride ? ` · ${eventState.timeOverride}` : ''}</button>}<textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="这个事件的个人备注…"/><small className={`save-state ${saveState}`}>{saveState === 'saving' ? '正在保存…' : saveState === 'saved' ? '已保存到本机' : saveState === 'error' ? '保存失败' : '保存在本机浏览器'}</small></section>
 }
 
 function BookingBlock({ booking, trip }: { booking: Booking; trip: TripData }) {
@@ -528,7 +481,7 @@ function DayNote({ day, travelerId, setNotice }: { day: DayPlan; travelerId: str
     }, 500)
     return () => clearTimeout(timer)
   }, [text, day.id, travelerId, setNotice])
-  return <section className="section note-section"><SectionTitle title="我的当天笔记" icon={NotebookPen} /><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="集合点、临时想法、花费……只保存在这台设备" /><small className={`save-state ${state}`}>{state === 'saving' ? '正在保存…' : state === 'saved' ? '已保存到本机' : state === 'error' ? '保存失败' : '仅自己这个旅客视图可见'}</small></section>
+  return <section className="section note-section"><SectionTitle title="我的当天笔记" icon={NotebookPen} /><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="集合点、临时想法、花费……只保存在这台设备" /><small className={`save-state ${state}`}>{state === 'saving' ? '正在保存…' : state === 'saved' ? '已保存到本机' : state === 'error' ? '保存失败' : '保存在本机浏览器'}</small></section>
 }
 
 function ScheduleView({ trip, travelerId, actualToday, onOpenDay }: { trip: TripData; travelerId: string; actualToday: string; onOpenDay: (date: string) => void }) {
@@ -572,9 +525,8 @@ function GuideSheet({ guide, trip, onClose }: { guide: GuideArticle; trip: TripD
   return <Sheet title={guide.title} onClose={onClose}><p className="guide-summary">{guide.summary}</p><div className="guide-body">{guide.body.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>{place && <a className="button primary wide" href={place.googleMapsUrl} target="_blank" rel="noreferrer"><Navigation size={17} /> 在 Google 地图打开</a>}{guide.attachmentIds && guide.attachmentIds.length > 0 && <AttachmentGrid attachmentIds={guide.attachmentIds} trip={trip} />}<SourceBlock sources={sources} /></Sheet>
 }
 
-function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZone, onImported, onLocked, onDeleted, setNotice }: { trip: TripData; travelerId: string; online: boolean; referenceTimeZone: string; onReferenceTimeZone: (value: string) => void; onImported: (data: TripData) => void | Promise<void>; onLocked: () => void; onDeleted: () => void; setNotice: (value: string | null) => void }) {
+function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZone, onImported, onDeleted, setNotice }: { trip: TripData; travelerId: string; online: boolean; referenceTimeZone: string; onReferenceTimeZone: (value: string) => void; onImported: (data: TripData) => void | Promise<void>; onDeleted: () => void; setNotice: (value: string | null) => void }) {
   const [estimate, setEstimate] = useState<{ usage?: number; quota?: number }>({})
-  const [backupPassword, setBackupPassword] = useState('')
   const [backingUp, setBackingUp] = useState(false)
   const [offlineStatus, setOfflineStatus] = useState('尚未检查')
   const [lastBackupAt, setLastBackupAt] = useState('')
@@ -592,25 +544,25 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
       const [taskStates, notes, settings] = await Promise.all([loadTaskStates(), loadNotes(), loadSettings()])
       const attachments = new Map<string, Blob>()
       for (const meta of trip.attachments) { const blob = await loadAttachment(meta.id); if (blob) attachments.set(meta.id, blob) }
-      const blob = await encryptBackup(trip, attachments, backupPassword, { taskStates, notes, settings })
+      const blob = await createLocalPackage(trip, attachments, { taskStates, notes, settings })
       const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `SpainDaily-backup-${new Date().toISOString().slice(0, 10)}.spaintrip`; anchor.click()
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `SpainDaily-personal-backup-${new Date().toISOString().slice(0, 10)}.spaintrip`; anchor.click()
       URL.revokeObjectURL(url)
       const backedUpAt = new Date().toISOString()
       await setSetting('lastBackupAt', backedUpAt)
-      setLastBackupAt(backedUpAt); setBackupPassword(''); setNotice('加密备份已下载。请把密码与备份文件分开保存。')
+      setLastBackupAt(backedUpAt); setNotice('个人备份已下载，文件未加密，请妥善保管。')
     } catch (error) { setNotice(error instanceof Error ? error.message : '备份失败') } finally { setBackingUp(false) }
   }
   const remove = async () => {
     if (!confirm('确定删除这台设备上的行程、票据、任务状态和笔记吗？此操作无法撤销。')) return
     try { await clearPrivateData(); onDeleted() } catch { setNotice('删除失败，请关闭其他打开的 SpainDaily 页面后重试。') }
   }
-  return <div className="page"><PageHeading eyebrow="本机设置" title="我的" description={`当前视图：${selectedTraveler?.displayName || ''}`} />
+  return <div className="page"><PageHeading eyebrow="本机设置" title="我的" description={`${selectedTraveler?.displayName || '个人'}的行程`} />
     <section className="settings-card status-card"><div className={online ? 'online-dot' : 'offline-dot'}>{online ? <Wifi /> : <WifiOff />}</div><div><strong>{online ? '网络已连接' : '当前离线'}</strong><p>{offlineStatus}</p><button className="text-action" onClick={() => checkOffline().catch(() => setOfflineStatus('检查失败'))}>重新检查离线资料</button></div></section>
-    <section className="settings-card"><h3><FileLock2 /> 更换行程包</h3><p>新包通过完整性校验后会先提示关联待办变化。导入失败不会留下半包，个人修改按稳定 ID 保留。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact existingTrip={trip} /></section>
-    <section className="settings-card"><h3><Download /> 加密备份</h3><p>导出行程、附件、个人任务状态和笔记。密码不会保存在设备上。{lastBackupAt && <><br />最近备份：{new Date(lastBackupAt).toLocaleString('zh-CN')}</>}</p><input type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="设置至少 8 位备份密码" autoComplete="new-password" /><button className="button primary wide" disabled={backingUp || backupPassword.length < 8} onClick={backup}>{backingUp ? '正在生成…' : '下载加密备份'}</button></section>
+    <section className="settings-card"><h3><FileText /> 更换个人行程</h3><p>资料在本机校验后保存；备注和待办状态保留在这台设备。</p><PackageImporter onImported={onImported} setNotice={setNotice} compact existingTrip={trip} /></section>
+    <section className="settings-card"><h3><Download /> 本机备份</h3><p>导出行程、附件、待办和备注。备份文件未加密，请妥善保管。{lastBackupAt && <><br />最近备份：{new Date(lastBackupAt).toLocaleString('zh-CN')}</>}</p><button className="button primary wide" disabled={backingUp} onClick={backup}>{backingUp ? '正在生成…' : '下载本机备份'}</button></section>
     <section className="settings-card"><h3><Globe2 /> 本机与时区</h3><label className="select-label">“今天”的参考时区<select value={referenceTimeZone} onChange={(event) => onReferenceTimeZone(event.target.value)}>{Array.from(new Set([Intl.DateTimeFormat().resolvedOptions().timeZone, trip.trip.defaultTimeZone, ...trip.dayPlans.map((day) => day.timeZone)])).map((zone) => <option key={zone} value={zone}>{zone}{zone === Intl.DateTimeFormat().resolvedOptions().timeZone ? ' · 本机' : ''}</option>)}</select></label><Fact label="本机占用" value={estimate.usage ? `${(estimate.usage / 1024 / 1024).toFixed(1)} MB` : '浏览器未提供'} /><p className="microcopy">事件仍按各自所在地 IANA 时区显示。行前默认本机时区；到达后可切成目的地时区。测试日期开关只在开发构建出现。</p></section>
-    <section className="settings-card"><h3><LockKeyhole /> 锁定私密资料</h3><p>立即清除当前页面内存中的姓名、行程、票据、任务和笔记；本机密文仍保留，下次需要密码重新解锁。</p><button className="button wide" onClick={onLocked}>立即锁定</button></section>
+    <section className="settings-card"><h3><LockKeyhole /> 本机隐私</h3><p>行程和个人修改以未加密形式保存在此浏览器中。请使用自己的手机，并避免把浏览器资料共享给他人。</p></section>
     <section className="settings-card danger-zone"><h3><Trash2 /> 删除本机数据</h3><p>不会影响源文件或其他设备，但本机笔记会一并删除。</p><button className="button danger wide" onClick={remove}>删除这台设备上的行程</button></section>
     <footer className="app-footer">SpainDaily · schema v{trip.schemaVersion}<br />公开外壳不含真实行程数据</footer>
   </div>
@@ -618,26 +570,25 @@ function MeView({ trip, travelerId, online, referenceTimeZone, onReferenceTimeZo
 
 function PackageImporter({ onImported, setNotice, compact, existingTrip }: { onImported: (data: TripData) => void | Promise<void>; setNotice: (value: string | null) => void; compact: boolean; existingTrip?: TripData }) {
   const [file, setFile] = useState<File | null>(null)
-  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const submit = async () => {
     if (!file) return
     setBusy(true); setNotice(null)
     try {
-      const pkg = await decryptTripPackage(file, password)
+      const pkg = await importLocalPackage(file)
       if (existingTrip && pkg.kind === 'trip') {
         const changes = taskChangeSummary(existingTrip, pkg.data)
         if (changes && !confirm(`${changes}\n\n继续更换行程包吗？`)) return
       }
       const backupState = pkg.kind === 'backup' ? (pkg.backupState || { taskStates: [], notes: [], settings: {} }) : undefined
-      await importPackageAtomically({ data: pkg.data, attachments: pkg.attachments, encryptedPackage: file, password, ...(backupState || {}) })
-      setPassword(''); await onImported(pkg.data)
+      await importPackageAtomically({ data: pkg.data, attachments: pkg.attachments, persistLocally: true, ...(backupState || {}) })
+      await onImported(pkg.data)
     } catch (error) { setNotice(error instanceof Error ? error.message : '行程包导入失败') } finally { setBusy(false) }
   }
-  return <div className={`importer ${compact ? 'compact' : ''}`}><input ref={inputRef} type="file" accept=".spaintrip,application/octet-stream" onChange={(event) => setFile(event.target.files?.[0] || null)} hidden />
-    <button className={`button ${compact ? '' : 'primary'} wide`} onClick={() => inputRef.current?.click()}><FileLock2 size={18} />{file ? file.name : '选择加密行程包'}</button>
-    {file && <><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="行程包密码" autoComplete="current-password" onKeyDown={(event) => { if (event.key === 'Enter') submit() }} /><button className="button primary wide" disabled={busy || !password} onClick={submit}>{busy ? '正在本机解锁…' : '解锁并导入'}</button></>}
+  return <div className={`importer ${compact ? 'compact' : ''}`}><input ref={inputRef} type="file" accept=".spaintrip,application/zip,application/octet-stream" onChange={(event) => setFile(event.target.files?.[0] || null)} hidden />
+    <button className={`button ${compact ? '' : 'primary'} wide`} disabled={busy} onClick={() => file ? submit() : inputRef.current?.click()}><FileText size={18} />{busy ? '正在导入到本机…' : file ? '导入并打开' : '选择个人行程文件'}</button>
+    {file && !busy && <button className="text-action" onClick={() => setFile(null)}>重新选择文件</button>}
   </div>
 }
 

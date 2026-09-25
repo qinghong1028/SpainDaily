@@ -114,6 +114,48 @@ export async function decryptTripPackage(file: File, password: string): Promise<
   return { data: parsed, attachments, backupState: state, kind: header.kind }
 }
 
+export async function importLocalPackage(file: File): Promise<ImportedPackage & { backupState?: BackupState; kind: PackageHeader['kind'] }> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  if (decoder.decode(bytes.subarray(0, MAGIC.length)) === MAGIC) {
+    throw new Error('这是旧版加密行程包。请改用新的免密码个人行程包。')
+  }
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) throw new Error('文件格式不正确，请选择 SpainDaily 个人行程包')
+  let files: Record<string, Uint8Array>
+  try { files = unzipSync(bytes) } catch { throw new Error('行程包损坏或无法读取') }
+  const tripBytes = files['trip.json']
+  if (!tripBytes) throw new Error('行程包缺少 trip.json')
+  let parsed: TripData
+  try { parsed = migrateTripData(JSON.parse(strFromU8(tripBytes))) } catch { throw new Error('行程资料格式不正确') }
+  const attachments = new Map<string, Blob>()
+  for (const meta of parsed.attachments) {
+    const value = files[meta.path]
+    if (!value) throw new Error(`行程包缺少附件：${meta.name}`)
+    if (value.byteLength !== meta.size || await sha256Hex(value) !== meta.sha256) throw new Error(`附件校验失败：${meta.name}`)
+    attachments.set(meta.id, new Blob([value], { type: meta.mimeType }))
+  }
+  const state = files['state.json'] ? parseBackupState(JSON.parse(strFromU8(files['state.json']))) : undefined
+  return { data: parsed, attachments, backupState: state, kind: state ? 'backup' : 'trip' }
+}
+
+export async function createLocalPackage(
+  data: TripData,
+  attachments: Map<string, Blob>,
+  state: BackupState,
+): Promise<Blob> {
+  const files: Record<string, Uint8Array> = {
+    'trip.json': strToU8(JSON.stringify(data)),
+    'state.json': strToU8(JSON.stringify(state)),
+  }
+  for (const meta of data.attachments) {
+    const blob = attachments.get(meta.id)
+    if (!blob) throw new Error(`备份缺少附件：${meta.name}`)
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    if (bytes.byteLength !== meta.size || await sha256Hex(bytes) !== meta.sha256) throw new Error(`附件完整性校验失败：${meta.name}`)
+    files[meta.path] = bytes
+  }
+  return new Blob([zipSync(files, { level: 0 })], { type: 'application/zip' })
+}
+
 export async function encryptBackup(
   data: TripData,
   attachments: Map<string, Blob>,

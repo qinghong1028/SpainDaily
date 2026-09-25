@@ -1,18 +1,19 @@
 import type { NoteState, TaskState, TripData } from '../domain/types'
-import { parseBackupState, decryptTripPackage } from '../security/package'
-import { createLocalStateCipher, decryptLocalState, encryptLocalState, type LocalStateCipher } from '../security/localState'
+import { parseBackupState } from '../security/package'
 
 const DB_NAME = 'spaindaily'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const VAULT_KEY = 'active'
 
-interface EncryptedVaultRecord {
+interface LocalTripRecord {
   key: typeof VAULT_KEY
   vaultId: string
-  packageBlob: Blob
+  trip: TripData
   stateBlob: Blob
   importedAt: string
 }
+
+interface LocalAttachmentRecord { id: string; blob: Blob }
 
 export interface ImportedPackage {
   data: TripData
@@ -22,6 +23,7 @@ export interface ImportedPackage {
   settings?: Record<string, unknown>
   encryptedPackage?: Blob
   password?: string
+  persistLocally?: boolean
 }
 
 let sessionTrip: TripData | null = null
@@ -29,7 +31,6 @@ let sessionAttachments = new Map<string, Blob>()
 let sessionTaskStates = new Map<string, TaskState>()
 let sessionNotes = new Map<string, NoteState>()
 let sessionSettings: Record<string, unknown> = {}
-let sessionCipher: LocalStateCipher | null = null
 let sessionVaultId: string | null = null
 let stateWriteChain = Promise.resolve()
 
@@ -48,13 +49,12 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
   })
 }
 
-function replaceSession(pkg: ImportedPackage, cipher: LocalStateCipher | null, vaultId: string | null): void {
+function replaceSession(pkg: ImportedPackage, vaultId: string | null): void {
   sessionTrip = pkg.data
   sessionAttachments = new Map(pkg.attachments)
   sessionTaskStates = new Map((pkg.taskStates || []).map((state) => [state.key, state]))
   sessionNotes = new Map((pkg.notes || []).map((note) => [note.key, note]))
   sessionSettings = { ...(pkg.settings || {}) }
-  sessionCipher = cipher
   sessionVaultId = vaultId
 }
 
@@ -64,7 +64,6 @@ function clearSession(): void {
   sessionTaskStates = new Map()
   sessionNotes = new Map()
   sessionSettings = {}
-  sessionCipher = null
   sessionVaultId = null
 }
 
@@ -81,10 +80,8 @@ export async function openDatabase(): Promise<IDBDatabase> {
     const open = indexedDB.open(DB_NAME, DB_VERSION)
     open.onupgradeneeded = () => {
       const db = open.result
-      for (const name of ['trip', 'attachments', 'tasks', 'notes', 'settings']) {
-        if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name)
-      }
       if (!db.objectStoreNames.contains('vault')) db.createObjectStore('vault', { keyPath: 'key' })
+      if (!db.objectStoreNames.contains('attachments')) db.createObjectStore('attachments', { keyPath: 'id' })
     }
     open.onsuccess = () => resolve(open.result)
     open.onerror = () => reject(open.error || new Error('无法打开本机存储'))
@@ -92,27 +89,25 @@ export async function openDatabase(): Promise<IDBDatabase> {
   })
 }
 
-async function loadVault(): Promise<EncryptedVaultRecord | null> {
+async function loadVault(): Promise<LocalTripRecord | null> {
   const db = await openDatabase()
   try {
-    return await request(db.transaction('vault', 'readonly').objectStore('vault').get(VAULT_KEY)) as EncryptedVaultRecord | undefined || null
+    return await request(db.transaction('vault', 'readonly').objectStore('vault').get(VAULT_KEY)) as LocalTripRecord | undefined || null
   } finally {
     db.close()
   }
 }
 
 export async function hasStoredPackage(): Promise<boolean> {
-  return Boolean(await loadVault())
+  return Boolean((await loadVault())?.trip)
 }
 
-export async function unlockStoredPackage(password: string): Promise<TripData> {
+export async function loadStoredPackage(): Promise<TripData | null> {
   const vault = await loadVault()
-  if (!vault) throw new Error('这台设备上没有已保存的加密行程')
-  const pkg = await decryptTripPackage(new File([vault.packageBlob], 'SpainDaily.spaintrip'), password)
-  const local = await decryptLocalState(vault.stateBlob, password)
-  const state = parseBackupState(local.payload)
-  replaceSession({ data: pkg.data, attachments: pkg.attachments, ...state }, local.cipher, vault.vaultId)
-  return pkg.data
+  if (!vault?.trip) return null
+  const state = vault.stateBlob ? parseBackupState(JSON.parse(await vault.stateBlob.text())) : { taskStates: [], notes: [], settings: {} }
+  replaceSession({ data: vault.trip, attachments: new Map(), ...state }, vault.vaultId)
+  return vault.trip
 }
 
 export async function loadTrip(): Promise<TripData | null> {
@@ -125,45 +120,46 @@ export async function importPackageAtomically(pkg: ImportedPackage): Promise<voi
   const settings = pkg.settings === undefined ? { ...sessionSettings } : { ...pkg.settings }
   const next = { ...pkg, taskStates, notes, settings }
 
-  if (!pkg.encryptedPackage || !pkg.password) {
-    replaceSession(next, null, null)
+  if (!pkg.persistLocally) {
+    replaceSession(next, null)
     return
   }
 
-  const cipher = await createLocalStateCipher(pkg.password)
-  const stateBlob = await encryptLocalState({ taskStates, notes, settings }, cipher)
+  const stateBlob = new Blob([JSON.stringify({ taskStates, notes, settings })], { type: 'application/json' })
   const vaultId = crypto.randomUUID()
-  const record: EncryptedVaultRecord = {
+  const record: LocalTripRecord = {
     key: VAULT_KEY,
     vaultId,
-    packageBlob: pkg.encryptedPackage,
+    trip: pkg.data,
     stateBlob,
     importedAt: new Date().toISOString(),
   }
   const db = await openDatabase()
-  const transaction = db.transaction('vault', 'readwrite', { durability: 'strict' })
+  const transaction = db.transaction(['vault', 'attachments'], 'readwrite', { durability: 'strict' })
   transaction.objectStore('vault').put(record)
+  const attachmentStore = transaction.objectStore('attachments')
+  attachmentStore.clear()
+  for (const [id, blob] of pkg.attachments) attachmentStore.put({ id, blob } satisfies LocalAttachmentRecord)
   try {
     await transactionDone(transaction)
   } finally {
     db.close()
   }
-  replaceSession(next, cipher, vaultId)
+  replaceSession(next, vaultId)
 }
 
 function persistSessionState(): Promise<void> {
-  const cipher = sessionCipher
   const vaultId = sessionVaultId
   const payload = statePayload()
-  if (!cipher || !vaultId) return Promise.resolve()
+  if (!vaultId) return Promise.resolve()
   const write = async () => {
-    const stateBlob = await encryptLocalState(payload, cipher)
+    const stateBlob = new Blob([JSON.stringify(payload)], { type: 'application/json' })
     if (sessionVaultId !== vaultId) return
     const db = await openDatabase()
     try {
       const transaction = db.transaction('vault', 'readwrite')
       const store = transaction.objectStore('vault')
-      const record = await request(store.get(VAULT_KEY)) as EncryptedVaultRecord | undefined
+      const record = await request(store.get(VAULT_KEY)) as LocalTripRecord | undefined
       if (record?.vaultId === vaultId) store.put({ ...record, stateBlob })
       await transactionDone(transaction)
     } finally {
@@ -175,7 +171,16 @@ function persistSessionState(): Promise<void> {
 }
 
 export async function loadAttachment(id: string): Promise<Blob | null> {
-  return sessionAttachments.get(id) || null
+  const cached = sessionAttachments.get(id)
+  if (cached) return cached
+  const db = await openDatabase()
+  try {
+    const record = await request(db.transaction('attachments', 'readonly').objectStore('attachments').get(id)) as LocalAttachmentRecord | undefined
+    if (record) sessionAttachments.set(id, record.blob)
+    return record?.blob || null
+  } finally {
+    db.close()
+  }
 }
 
 export async function loadTaskStates(): Promise<TaskState[]> {
@@ -220,8 +225,9 @@ export async function clearPrivateData(): Promise<void> {
   clearSession()
   await stateWriteChain.catch(() => undefined)
   const db = await openDatabase()
-  const transaction = db.transaction('vault', 'readwrite')
+  const transaction = db.transaction(['vault', 'attachments'], 'readwrite')
   transaction.objectStore('vault').clear()
+  transaction.objectStore('attachments').clear()
   await transactionDone(transaction)
   db.close()
 }
@@ -232,5 +238,10 @@ export async function storageEstimate(): Promise<{ usage?: number; quota?: numbe
 }
 
 export async function storedAttachmentIds(): Promise<string[]> {
-  return Array.from(sessionAttachments.keys())
+  const db = await openDatabase()
+  try {
+    return (await request(db.transaction('attachments', 'readonly').objectStore('attachments').getAllKeys())).map(String)
+  } finally {
+    db.close()
+  }
 }

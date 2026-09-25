@@ -5,6 +5,18 @@ import { createLocalStateCipher, decryptLocalState, encryptLocalState, type Loca
 const DB_NAME = 'spaindaily'
 const DB_VERSION = 3
 const VAULT_KEY = 'active'
+const LOCAL_KEY = 'spaindaily-personal-v1'
+const PRIVATE_CACHE_PREFIX = 'spaindaily-private-'
+
+interface PersonalTripRecord {
+  vaultId: string
+  trip: TripData
+  taskStates: TaskState[]
+  notes: NoteState[]
+  settings: Record<string, unknown>
+  attachmentIds: string[]
+  importedAt: string
+}
 
 interface LocalTripRecord {
   key: typeof VAULT_KEY
@@ -42,7 +54,17 @@ let sessionNotes = new Map<string, NoteState>()
 let sessionSettings: Record<string, unknown> = {}
 let sessionCipher: LocalStateCipher | null = null
 let sessionVaultId: string | null = null
+let sessionCacheName: string | null = null
 let stateWriteChain = Promise.resolve()
+
+function readPersonalRecord(): PersonalTripRecord | null {
+  const value = localStorage.getItem(LOCAL_KEY)
+  return value ? JSON.parse(value) as PersonalTripRecord : null
+}
+
+function attachmentUrl(vaultId: string, id: string): string {
+  return new URL(`${import.meta.env.BASE_URL}__private/${encodeURIComponent(vaultId)}/${encodeURIComponent(id)}`, location.origin).href
+}
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -73,6 +95,7 @@ function replaceSession(pkg: ImportedPackage, cipher: LocalStateCipher | null, v
   sessionSettings = { ...(pkg.settings || {}) }
   sessionCipher = cipher
   sessionVaultId = vaultId
+  sessionCacheName = null
 }
 
 function clearSession(): void {
@@ -83,6 +106,7 @@ function clearSession(): void {
   sessionSettings = {}
   sessionCipher = null
   sessionVaultId = null
+  sessionCacheName = null
 }
 
 function statePayload() {
@@ -116,11 +140,18 @@ async function loadVault(): Promise<LocalTripRecord | null> {
 }
 
 export async function hasStoredPackage(): Promise<boolean> {
+  if (readPersonalRecord()) return true
   const vault = await loadVault()
   return Boolean(vault?.trip || vault?.packageBlob)
 }
 
 export async function loadStoredPackage(): Promise<TripData | null> {
+  const personal = readPersonalRecord()
+  if (personal) {
+    replaceSession({ data: personal.trip, attachments: new Map(), taskStates: personal.taskStates, notes: personal.notes, settings: personal.settings }, null, personal.vaultId)
+    sessionCacheName = `${PRIVATE_CACHE_PREFIX}${personal.vaultId}`
+    return personal.trip
+  }
   const vault = await loadVault()
   if (!vault?.trip) return null
   const state = vault.stateBlob ? parseBackupState(JSON.parse(await vault.stateBlob.text())) : { taskStates: [], notes: [], settings: {} }
@@ -160,36 +191,31 @@ export async function importPackageAtomically(pkg: ImportedPackage): Promise<voi
   const next = { ...pkg, taskStates, notes, settings }
 
   if (pkg.persistLocally) {
-    const stateBlob = new Blob([JSON.stringify({ taskStates, notes, settings })], { type: 'application/json' })
     const vaultId = crypto.randomUUID()
-    const attachmentKeys = Array.from(pkg.attachments.keys(), (id) => `attachment:${vaultId}:${id}`)
-    const db = await openDatabase()
-    const writtenKeys: string[] = []
+    const cacheName = `${PRIVATE_CACHE_PREFIX}${vaultId}`
+    const previous = readPersonalRecord()
     try {
       for (const [id, blob] of pkg.attachments) {
-        const transaction = db.transaction('vault', 'readwrite')
-        transaction.objectStore('vault').put({ key: `attachment:${vaultId}:${id}`, vaultId, id, blob } satisfies LocalAttachmentRecord)
-        await transactionDone(transaction)
-        writtenKeys.push(`attachment:${vaultId}:${id}`)
-      }
-      const record: LocalTripRecord = {
-        key: VAULT_KEY, vaultId, trip: pkg.data, attachmentKeys,
-        stateBlob, importedAt: new Date().toISOString(),
-      }
-      const transaction = db.transaction('vault', 'readwrite')
-      transaction.objectStore('vault').put(record)
-      await transactionDone(transaction)
-    } catch (error) {
-      for (const key of writtenKeys) {
         try {
-          const cleanup = db.transaction('vault', 'readwrite')
-          cleanup.objectStore('vault').delete(key)
-          await transactionDone(cleanup)
-        } catch { /* Best effort: the active manifest is unchanged, so partial data stays unused. */ }
+          const cache = await caches.open(cacheName)
+          await cache.put(attachmentUrl(vaultId, id), new Response(blob, { headers: { 'Content-Type': blob.type || 'application/octet-stream' } }))
+        } catch (error) {
+          throw new Error(`附件保存失败（${id}，${(blob.size / 1024 / 1024).toFixed(1)} MB）：${error instanceof Error ? error.message : '本机存储不可用'}`)
+        }
       }
+      const record: PersonalTripRecord = {
+        vaultId, trip: pkg.data, taskStates, notes, settings,
+        attachmentIds: Array.from(pkg.attachments.keys()), importedAt: new Date().toISOString(),
+      }
+      try { localStorage.setItem(LOCAL_KEY, JSON.stringify(record)) }
+      catch (error) { throw new Error(`行程目录保存失败：${error instanceof Error ? error.message : '本机存储不可用'}`) }
+    } catch (error) {
+      if ('caches' in globalThis) await caches.delete(cacheName).catch(() => undefined)
       throw error
-    } finally { db.close() }
+    }
     replaceSession(next, null, vaultId)
+    sessionCacheName = cacheName
+    if (previous && previous.vaultId !== vaultId) await caches.delete(`${PRIVATE_CACHE_PREFIX}${previous.vaultId}`).catch(() => undefined)
     return
   }
 
@@ -217,6 +243,11 @@ function persistSessionState(): Promise<void> {
   const payload = statePayload()
   if (!vaultId) return Promise.resolve()
   const write = async () => {
+    if (sessionCacheName) {
+      const record = readPersonalRecord()
+      if (record?.vaultId === vaultId) localStorage.setItem(LOCAL_KEY, JSON.stringify({ ...record, ...payload }))
+      return
+    }
     const stateBlob = cipher
       ? await encryptLocalState(payload, cipher)
       : new Blob([JSON.stringify(payload)], { type: 'application/json' })
@@ -237,7 +268,11 @@ function persistSessionState(): Promise<void> {
 }
 
 export async function loadAttachment(id: string): Promise<Blob | null> {
-  return sessionAttachments.get(id) || null
+  const inMemory = sessionAttachments.get(id)
+  if (inMemory) return inMemory
+  if (!sessionCacheName || !sessionVaultId) return null
+  const response = await (await caches.open(sessionCacheName)).match(attachmentUrl(sessionVaultId, id))
+  return response ? response.blob() : null
 }
 
 export async function loadTaskStates(): Promise<TaskState[]> {
@@ -281,6 +316,8 @@ export function lockPrivateData(): void {
 export async function clearPrivateData(): Promise<void> {
   clearSession()
   await stateWriteChain.catch(() => undefined)
+  localStorage.removeItem(LOCAL_KEY)
+  if ('caches' in globalThis) await Promise.all((await caches.keys()).filter((key) => key.startsWith(PRIVATE_CACHE_PREFIX)).map((key) => caches.delete(key)))
   const db = await openDatabase()
   const transaction = db.transaction('vault', 'readwrite')
   transaction.objectStore('vault').clear()
@@ -294,5 +331,10 @@ export async function storageEstimate(): Promise<{ usage?: number; quota?: numbe
 }
 
 export async function storedAttachmentIds(): Promise<string[]> {
+  if (sessionCacheName && sessionVaultId && sessionTrip) {
+    const cache = await caches.open(sessionCacheName)
+    const checks = await Promise.all(sessionTrip.attachments.map(async ({ id }) => ({ id, found: Boolean(await cache.match(attachmentUrl(sessionVaultId!, id))) })))
+    return checks.filter(({ found }) => found).map(({ id }) => id)
+  }
   return Array.from(sessionAttachments.keys())
 }

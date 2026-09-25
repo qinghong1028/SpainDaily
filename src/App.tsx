@@ -56,6 +56,9 @@ function App() {
   const activateTrip = async (data: TripData) => {
     const [savedTimeZone] = await Promise.all([getSetting<string>('referenceTimeZone')])
     const personalTraveler = data.travelers.find((item) => item.shortName === 'YY') || data.travelers[0]
+    const timeZone = savedTimeZone || referenceTimeZone
+    const today = localDateInTimeZone(timeZone, new Date())
+    setSelectedDate(clampTripDate(today, data.trip.preparationStartDate, data.trip.endDate))
     setTrip(data)
     setTravelerId(personalTraveler?.id || null)
     if (savedTimeZone) setReferenceTimeZone(savedTimeZone)

@@ -10,6 +10,9 @@
     <title>SpainDaily</title>
   </head>
   <body>
+    <script>
+      if ('serviceWorker' in navigator && !location.port) navigator.serviceWorker.register('./sw.js?v=4').catch(() => {})
+    </script>
     <div id="root">
       <div style="max-width:28rem;margin:25vh auto 0;padding:2rem;text-align:center;color:#173f3a;font-family:-apple-system,BlinkMacSystemFont,sans-serif">
         <strong>正在打开行程…</strong>
